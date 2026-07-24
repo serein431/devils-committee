@@ -1,0 +1,392 @@
+{
+  "input": {
+    "skill": "debate_case",
+    "topic": "帮我理解一下 600519 贵州茅台 现在多空双方各自的理由和风险"
+  },
+  "expected": {
+    "symbol": "600519.SH",
+    "n_claims": 4,
+    "sides": [
+      "bear",
+      "bull",
+      "macro",
+      "risk"
+    ],
+    "n_audit_flags": 2,
+    "audit_flags": [
+      {
+        "claim_id": "bear-1",
+        "status": "bad_data",
+        "severity": "medium"
+      },
+      {
+        "claim_id": "risk-1",
+        "status": "bad_data",
+        "severity": "medium"
+      }
+    ],
+    "has_disclaimer": true,
+    "compliance": {
+      "gate": "passed",
+      "banned_patterns": 8
+    }
+  },
+  "full_output_sample": {
+    "topic": "帮我理解一下 600519 贵州茅台 现在多空双方各自的理由和风险",
+    "claims": [
+      {
+        "id": "bull-1",
+        "agent": "Bull",
+        "side": "bull",
+        "text": "我看好 600519.SH——多因子打分给出正向排序（top_factor=momentum_12m, ic=0.059, ir=0.69）；残差引导筛出的因子有互补信息（selected=residual_reversal, ic=0.079, n_obs=54）；该框架判断当前环境偏「防御、后周期」；仅作研究背景，不构成判断。，这些信号都往同一个方向指。别只盯着风险，机会也是证据说了算。",
+        "confidence": 0.736,
+        "plain": "一句话：它看好这只票，因为几个关键数字都朝上——但记住，看好不等于该买。",
+        "evidence": [
+          {
+            "skill": "skill-factor-ranking-sage",
+            "summary": "多因子打分给出正向排序",
+            "data_ref": "600519.SH 20240101..20241219 (mock)",
+            "metrics": {
+              "top_factor": "momentum_12m",
+              "ic": 0.059,
+              "ir": 0.69,
+              "n_obs": 119,
+              "window_return": 0.0185
+            }
+          },
+          {
+            "skill": "skill-residual-guided-factor-selection",
+            "summary": "残差引导筛出的因子有互补信息",
+            "data_ref": "",
+            "metrics": {
+              "selected": "residual_reversal",
+              "ic": 0.079,
+              "n_obs": 54
+            }
+          },
+          {
+            "skill": "skill-us-sector-rotation",
+            "summary": "该框架判断当前环境偏「防御、后周期」；仅作研究背景，不构成判断。",
+            "data_ref": "",
+            "metrics": {}
+          }
+        ],
+        "skills_used": [
+          "skill-factor-ranking-sage",
+          "skill-residual-guided-factor-selection",
+          "skill-us-sector-rotation"
+        ]
+      },
+      {
+        "id": "bear-1",
+        "agent": "Bear",
+        "side": "bear",
+        "text": "先别急着乐观。600519.SH 有几处我一直盯着的隐患：流动性压力测试显示清仓成本不低（adv_participation=0.27, days_to_liquidate=2.7, impact_bps=97）；指数再平衡事件研究的异常收益（car_bps=64, window=[-5,+5], n_events=12）；持仓结构集中度需警惕（concentration=high）。上涨的故事得先过得了这几关。",
+        "confidence": 0.55,
+        "plain": "一句话：它对这只票有顾虑，盯着的是能不能顺利卖出、以及事件风险。",
+        "evidence": [
+          {
+            "skill": "skill-portfolio-liquidity-stress-test",
+            "summary": "流动性压力测试显示清仓成本不低",
+            "data_ref": "600519.SH 20240101..20241219 (mock)",
+            "metrics": {
+              "adv_participation": 0.27,
+              "days_to_liquidate": 2.7,
+              "impact_bps": 97
+            }
+          },
+          {
+            "skill": "skill-index-rebalance-event-study",
+            "summary": "指数再平衡事件研究的异常收益",
+            "data_ref": "",
+            "metrics": {
+              "car_bps": 64,
+              "window": "[-5,+5]",
+              "n_events": 12
+            }
+          },
+          {
+            "skill": "skill-holder-structure-scan",
+            "summary": "持仓结构集中度需警惕",
+            "data_ref": "",
+            "metrics": {
+              "concentration": "high"
+            }
+          }
+        ],
+        "skills_used": [
+          "skill-portfolio-liquidity-stress-test",
+          "skill-index-rebalance-event-study",
+          "skill-holder-structure-scan"
+        ]
+      },
+      {
+        "id": "macro-1",
+        "agent": "Macro",
+        "side": "macro",
+        "text": "把镜头拉远看 600519.SH：该框架判断当前环境偏「防御、后周期」；仅作研究背景，不构成判断。；该框架判断当前环境偏「再通胀」；仅作研究背景，不构成判断。。个股的多空，得放进这个环境里才站得住。",
+        "confidence": 0.5,
+        "plain": "一句话：它在讲大环境（顺风还是逆风），不对这只票单独下结论。",
+        "evidence": [
+          {
+            "skill": "skill-dalio-all-weather",
+            "summary": "该框架判断当前环境偏「防御、后周期」；仅作研究背景，不构成判断。",
+            "data_ref": "",
+            "metrics": {}
+          },
+          {
+            "skill": "skill-templeton-global-contrarian",
+            "summary": "该框架判断当前环境偏「再通胀」；仅作研究背景，不构成判断。",
+            "data_ref": "",
+            "metrics": {}
+          }
+        ],
+        "skills_used": [
+          "skill-dalio-all-weather",
+          "skill-templeton-global-contrarian"
+        ]
+      },
+      {
+        "id": "risk-1",
+        "agent": "Risk",
+        "side": "risk",
+        "text": "抛开谁对谁错，我只报 600519.SH 的敞口：集中清仓的冲击成本边界（impact_bps=97, days_to_liquidate=2.7）；复权一致性是价格序列可信的前提（checked=split+dividend）。这些是边界，不是判断——越界了再好的逻辑也得让路。",
+        "confidence": 0.5,
+        "plain": "一句话：它只提醒风险边界（最坏会怎样），不站多空任何一边。",
+        "evidence": [
+          {
+            "skill": "skill-portfolio-liquidity-stress-test",
+            "summary": "集中清仓的冲击成本边界",
+            "data_ref": "",
+            "metrics": {
+              "impact_bps": 97,
+              "days_to_liquidate": 2.7
+            }
+          },
+          {
+            "skill": "skill-corporate-action-adjustment-auditor",
+            "summary": "复权一致性是价格序列可信的前提",
+            "data_ref": "",
+            "metrics": {
+              "checked": "split+dividend"
+            }
+          }
+        ],
+        "skills_used": [
+          "skill-portfolio-liquidity-stress-test",
+          "skill-corporate-action-adjustment-auditor"
+        ]
+      }
+    ],
+    "verdicts": [
+      {
+        "claim_id": "bull-1",
+        "status": "pass",
+        "reason": "我尽力挑刺了：证据链闭合，抽样、复权、调参都查过，这条我挑不出毛病，放行。",
+        "audit_skill": "",
+        "severity": "none",
+        "remediation": "",
+        "provenance": "mock",
+        "plain": "这条经得起查：数据、抽样、调参都对得上，暂时挑不出毛病。"
+      },
+      {
+        "claim_id": "bear-1",
+        "status": "bad_data",
+        "reason": "证据本身就带病（坏数据）：20240506: -15.0% jump — possible unadjusted corporate action or bad tick.；20240507: 17.0% jump — possible unadjusted corporate action or bad tick. 结论再漂亮也是建在流沙上。",
+        "audit_skill": "skill-corporate-action-adjustment-auditor",
+        "severity": "medium",
+        "remediation": "先过复权/数据质量审计修正异常价，再引用该证据。",
+        "provenance": "mock",
+        "plain": "小心：这条用的价格数据本身有问题（好比体重秤没归零就称），先把数据修对，再谈结论。"
+      },
+      {
+        "claim_id": "macro-1",
+        "status": "pass",
+        "reason": "我尽力挑刺了：证据链闭合，抽样、复权、调参都查过，这条我挑不出毛病，放行。",
+        "audit_skill": "",
+        "severity": "none",
+        "remediation": "",
+        "provenance": "mock",
+        "plain": "这条经得起查：数据、抽样、调参都对得上，暂时挑不出毛病。"
+      },
+      {
+        "claim_id": "risk-1",
+        "status": "bad_data",
+        "reason": "证据本身就带病（坏数据）：20240506: -15.0% jump — possible unadjusted corporate action or bad tick.；20240507: 17.0% jump — possible unadjusted corporate action or bad tick. 结论再漂亮也是建在流沙上。",
+        "audit_skill": "skill-corporate-action-adjustment-auditor",
+        "severity": "medium",
+        "remediation": "先过复权/数据质量审计修正异常价，再引用该证据。",
+        "provenance": "mock",
+        "plain": "小心：这条用的价格数据本身有问题（好比体重秤没归零就称），先把数据修对，再谈结论。"
+      }
+    ],
+    "audit_flags": [
+      {
+        "claim_id": "bear-1",
+        "status": "bad_data",
+        "reason": "证据本身就带病（坏数据）：20240506: -15.0% jump — possible unadjusted corporate action or bad tick.；20240507: 17.0% jump — possible unadjusted corporate action or bad tick. 结论再漂亮也是建在流沙上。",
+        "audit_skill": "skill-corporate-action-adjustment-auditor",
+        "severity": "medium",
+        "remediation": "先过复权/数据质量审计修正异常价，再引用该证据。",
+        "provenance": "mock",
+        "plain": "小心：这条用的价格数据本身有问题（好比体重秤没归零就称），先把数据修对，再谈结论。"
+      },
+      {
+        "claim_id": "risk-1",
+        "status": "bad_data",
+        "reason": "证据本身就带病（坏数据）：20240506: -15.0% jump — possible unadjusted corporate action or bad tick.；20240507: 17.0% jump — possible unadjusted corporate action or bad tick. 结论再漂亮也是建在流沙上。",
+        "audit_skill": "skill-corporate-action-adjustment-auditor",
+        "severity": "medium",
+        "remediation": "先过复权/数据质量审计修正异常价，再引用该证据。",
+        "provenance": "mock",
+        "plain": "小心：这条用的价格数据本身有问题（好比体重秤没归零就称），先把数据修对，再谈结论。"
+      }
+    ],
+    "consensus": [
+      "双方都只用平台历史数据、且已缓存可复现（600519.SH）。",
+      "没有任何一方给出〔已按合规移除操作性表述〕或收益——本庭只谈逻辑与风险。"
+    ],
+    "open_disagreements": [
+      {
+        "topic": "因子信号站不站得住",
+        "bull_view": "多因子打分把 momentum_12m 排在前面（IC=0.059），我当正向信号。",
+        "bear_view": "审计这轮没在因子上挑出硬伤，我转而盯流动性。",
+        "status": "consensus"
+      },
+      {
+        "topic": "证据本身干不干净",
+        "bull_view": "空头/风控引用了流动性、事件与复权相关证据。",
+        "bear_view": "但这些证据的价格序列被审计查出未复权跳空——先修数据再引用。",
+        "status": "open"
+      },
+      {
+        "topic": "流动性与事件风险有多重",
+        "bull_view": "板块轮动与宏观环境这轮偏顺风。",
+        "bear_view": "但集中清仓冲击约 97bps、要 2.7 天，再平衡事件期异常收益 64bps，不可忽视。",
+        "status": "open"
+      }
+    ],
+    "risk_boundaries": [
+      "本内容仅供学习与研究，不构成任何投资建议。",
+      "历史与缓存数据不代表未来表现；样本区间有限。",
+      "⚠️ Bear 的一条论据被审计标注为「bad_data」：先过复权/数据质量审计修正异常价，再引用该证据。（此处 AI 不确定，建议人工/专业核实）",
+      "⚠️ Risk 的一条论据被审计标注为「bad_data」：先过复权/数据质量审计修正异常价，再引用该证据。（此处 AI 不确定，建议人工/专业核实）"
+    ],
+    "disclaimer": "本内容由多智能体辩论生成，仅供学习与研究，不构成任何投资建议；不含买卖操作、目标价或收益承诺。历史/缓存数据不代表未来表现。",
+    "elapsed_sec": 0.0,
+    "meta": {
+      "symbol": "600519.SH",
+      "modes": {
+        "llm_mode": "mock",
+        "skill_mode": "mock",
+        "data_mode": "mock",
+        "llm_model": "(mock)",
+        "auth": "off (dev)",
+        "public_url": "http://localhost:8080"
+      },
+      "n_claims": 4,
+      "n_flags": 2,
+      "audit_engine": "mock",
+      "data": {
+        "symbol": "600519.SH",
+        "n": 250,
+        "source": "mock",
+        "first_date": "20240101",
+        "last_date": "20241219",
+        "total_return": 0.0185
+      },
+      "skills_manifest": {
+        "data": {
+          "symbol": "600519.SH",
+          "window": "20240101..20241219",
+          "source": "mock",
+          "n_bars": 250
+        },
+        "evidence_skills": [
+          {
+            "skill": "skill-corporate-action-adjustment-auditor",
+            "used_by": [
+              "Risk"
+            ]
+          },
+          {
+            "skill": "skill-dalio-all-weather",
+            "used_by": [
+              "Macro"
+            ]
+          },
+          {
+            "skill": "skill-factor-ranking-sage",
+            "used_by": [
+              "Bull"
+            ]
+          },
+          {
+            "skill": "skill-holder-structure-scan",
+            "used_by": [
+              "Bear"
+            ]
+          },
+          {
+            "skill": "skill-index-rebalance-event-study",
+            "used_by": [
+              "Bear"
+            ]
+          },
+          {
+            "skill": "skill-portfolio-liquidity-stress-test",
+            "used_by": [
+              "Bear",
+              "Risk"
+            ]
+          },
+          {
+            "skill": "skill-residual-guided-factor-selection",
+            "used_by": [
+              "Bull"
+            ]
+          },
+          {
+            "skill": "skill-templeton-global-contrarian",
+            "used_by": [
+              "Macro"
+            ]
+          },
+          {
+            "skill": "skill-us-sector-rotation",
+            "used_by": [
+              "Bull"
+            ]
+          }
+        ],
+        "audit_skills": [
+          {
+            "skill": "skill-corporate-action-adjustment-auditor",
+            "verdict_for": [
+              "bear-1",
+              "risk-1"
+            ],
+            "provenance": [
+              "mock"
+            ]
+          }
+        ],
+        "all_skills": [
+          "skill-corporate-action-adjustment-auditor",
+          "skill-dalio-all-weather",
+          "skill-factor-ranking-sage",
+          "skill-holder-structure-scan",
+          "skill-index-rebalance-event-study",
+          "skill-portfolio-liquidity-stress-test",
+          "skill-residual-guided-factor-selection",
+          "skill-templeton-global-contrarian",
+          "skill-us-sector-rotation"
+        ]
+      },
+      "compliance": {
+        "gate": "passed",
+        "banned_patterns": 8
+      }
+    }
+  }
+}

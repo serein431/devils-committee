@@ -1,0 +1,9 @@
+# Backend (A2A server). Core engine itself is pure stdlib.
+fastapi>=0.115
+uvicorn>=0.30
+httpx>=0.27          # only used when LLM_MODE=openai (DeepSeek etc.)
+
+# Optional — enable when going live with real data (DATA_MODE=panda):
+# panda_data==0.0.12   # TODO(feishu): from the PandaAI Feishu group
+# duckdb>=1.0          # 7-day data window -> local cache
+# pandas>=2.2

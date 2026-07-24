@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>反方 · The Devil's Committee — 技术白皮书</title>
+<style>
+  :root{
+    --bull:#1ba8b0;--bear:#ef5f4e;--macro:#8b74ef;--risk:#bd8718;
+    --good:#35c98a;--warn:#f0b429;--crit:#ff3b5c;--accent:#3fd3e6;
+    --bg:#0a0c0d;--panel:#101315;--panel2:#151a1d;--line:#232b31;--line2:#2e383f;
+    --ink:#dce4ea;--sub:#8592a0;--dim:#525d66;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.7;font-size:15px}
+  .doc{max-width:860px;margin:0 auto;padding:52px 28px 100px}
+  .mono{font-family:var(--mono)}
+  .cover{border-bottom:1px solid var(--line2);padding-bottom:30px}
+  .badge{font-family:var(--mono);color:var(--accent);font-size:12px;letter-spacing:3px}
+  h1{font-family:var(--mono);font-size:33px;line-height:1.15;letter-spacing:.5px;margin:14px 0 10px}
+  h1 .rev{color:var(--crit)}
+  .sub{color:var(--sub);font-size:16px;max-width:62ch}
+  .kpis{display:flex;gap:26px;flex-wrap:wrap;margin-top:22px}
+  .kpi .n{font-family:var(--mono);font-size:24px;font-weight:800}
+  .kpi .l{color:var(--sub);font-size:12px}
+  .meta{font-family:var(--mono);color:var(--dim);font-size:12px;margin-top:18px}
+  h2{font-family:var(--mono);font-size:21px;letter-spacing:.5px;margin:42px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
+  h2 .n{color:var(--accent);margin-right:12px}
+  h3{font-family:var(--mono);font-size:15px;letter-spacing:.5px;color:var(--sub);margin:24px 0 6px}
+  p{margin:12px 0} b{color:#fff;font-weight:600}
+  .cy{color:var(--accent)}.gd{color:var(--good)}.rd{color:var(--bear)}.rev{color:var(--crit)}
+  ul{margin:12px 0;padding-left:0;list-style:none}
+  li{position:relative;padding-left:22px;margin:8px 0}
+  li::before{content:"▸";position:absolute;left:0;color:var(--accent)}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:1px 6px;font-size:13px;color:var(--cy)}
+  pre{font-family:var(--mono);background:var(--panel);border:1px solid var(--line2);border-radius:7px;padding:15px 18px;overflow-x:auto;font-size:12.5px;line-height:1.6;margin:16px 0}
+  pre .c{color:var(--dim)}.k{color:var(--macro)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--line)}
+  th{font-family:var(--mono);font-size:12px;letter-spacing:.5px;color:var(--sub)}
+  td.mono,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .callout{border-left:3px solid var(--accent);background:var(--panel);border-radius:0 7px 7px 0;padding:12px 18px;margin:18px 0}
+  .callout.crit{border-color:var(--crit)}
+  .callout .l{font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--accent)}
+  .callout.crit .l{color:var(--crit)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}.kpis{gap:18px}}
+  .box{border:1px solid var(--line2);border-radius:7px;background:var(--panel);padding:14px 16px}
+  .box h4{font-family:var(--mono);font-size:13px;margin:0 0 8px;color:var(--ink)}
+  .chart{border:1px solid var(--line2);border-radius:7px;background:var(--panel);padding:12px 14px;margin:14px 0}
+  .chart .cap{font-family:var(--mono);font-size:11px;color:var(--sub);margin-top:6px}
+  .tag{font-family:var(--mono);font-size:11px;border:1px solid var(--line2);border-radius:3px;padding:1px 7px;color:var(--sub)}
+  .tag.real{color:var(--accent);border-color:var(--accent)}
+  .toc{font-family:var(--mono);font-size:13px;color:var(--sub);border:1px solid var(--line);border-radius:7px;padding:16px 20px;margin:24px 0;column-count:2;column-gap:30px}
+  .toc a{color:var(--sub);text-decoration:none;display:block;padding:3px 0}.toc a:hover{color:var(--ink)}
+  .foot{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;color:var(--dim);font-size:12px;font-family:var(--mono)}
+  @media print{
+    body{background:#fff;color:#15181c;font-size:11pt}.doc{max-width:100%;padding:0}
+    h1,h2,h3,.badge,.mono{color:#0a0c0d}b{color:#000}.cy,.gd{color:#0a6b78}.rd,.rev{color:#b23}
+    code,pre,.box,.callout,.chart{background:#f6f8fa;border-color:#dde3e8;color:#15181c}
+    th,td,h2{border-color:#dde3e8}.toc{display:none}h2{page-break-after:avoid}pre,table,.box,.chart{page-break-inside:avoid}
+    svg polyline{stroke-width:2.5}
+  }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="cover">
+    <div class="badge">TECHNICAL & PRODUCT WHITEPAPER · v2.0 · 2026</div>
+    <h1>反方 · <span class="rev">The Devil's Committee</span><br>AI 投资辩论庭</h1>
+    <p class="sub">一个多智能体对抗辩论 + 独立审计的理财认知教练。它不给买卖，
+      让六个 AI 就一个标的公开辩论，由一个独立审计 Agent 在<b>真实历史数据</b>上逐条复核、
+      抓过拟合与坏数据并当场驳回——教用户自己判断。面向 AdventureX 2026。</p>
+    <div class="kpis">
+      <div class="kpi"><div class="n cy">24×726</div><div class="l">真实 A 股 × 交易日</div></div>
+      <div class="kpi"><div class="n">6</div><div class="l">真实因子 · 真 IC/回测</div></div>
+      <div class="kpi"><div class="n gd">63</div><div class="l">自动化测试</div></div>
+      <div class="kpi"><div class="n rev">real</div><div class="l">panda 数据 · QuantSkills 审计</div></div>
+    </div>
+    <div class="meta">TEAM ADVX2026 · 2×14yo + 2 undergrads　|　仅供学习研究 · 不构成投资建议</div>
+  </div>
+
+  <div class="toc mono">
+    <a href="#1">1 · 摘要</a><a href="#2">2 · 问题</a><a href="#3">3 · 产品概述</a>
+    <a href="#4">4 · 真量化引擎（核心差异化）</a><a href="#5">5 · 审计方法论：抓假与改进</a>
+    <a href="#6">6 · 核心机制：对抗辩论</a><a href="#7">7 · 技术架构</a><a href="#8">8 · 合规与稳健性</a>
+    <a href="#9">9 · 工程证据</a><a href="#10">10 · 多赛道</a><a href="#11">11 · 团队与愿景</a><a href="#12">附录</a>
+  </div>
+
+  <h2 id="1"><span class="n">01</span>摘要</h2>
+  <p>当强模型人人可得，<b>结论不再稀缺，判断力才稀缺</b>。市面上的金融 AI 几乎都在生产更好的结论；
+    我们反转范式：不生产结论，而是<b class="cy">编排一场结构化的对抗辩论</b>，并引入一个
+    <b class="rev">独立审计 Agent</b>，在真实历史数据上复核论据的完整性——抓过拟合、选择偏差、坏数据，可当场驳回。</p>
+  <p>与套壳聊天框的本质区别在于：本系统的每个数字都<b>从真实行情算出来</b>。我们构建了一个真量化引擎，
+    在 24 只 A 股、726 个交易日上计算真因子的横截面 IC、样本内/外分离与多空回测。审计据此抓出的过拟合是
+    <b>可复现的真发现</b>，而非预设脚本。产品一个引擎、两张脸：对开发者是标准 <code>A2A</code> Remote Agent，
+    对小白是不给操作建议、只教判断的理财教练。</p>
+
+  <h2 id="2"><span class="n">02</span>问题</h2>
+  <p><b>情境</b>：理财小白面对一只标的，网络信息高度一边倒——满屏「买入 / 看涨」，而三样最关键的东西被系统性隐藏：</p>
+  <ul>
+    <li><b>反方缺席</b>：看多叙事从不认真呈现看空逻辑。</li>
+    <li><b>风险被抹平</b>：清仓冲击成本、事件驱动异常收益、持仓集中度，在顺风故事里消失。</li>
+    <li><b>论据不可审计</b>：一个「历史回报很高」的因子，可能是<span class="rd">过拟合</span>（样本内漂亮、样本外失效）
+      或<span class="rd">选择偏差</span>（只统计了活下来的赢家）的产物——小白无从分辨，甚至专业玩家也常自欺。</li>
+  </ul>
+
+  <h2 id="3"><span class="n">03</span>产品概述</h2>
+  <p>用户用一句自然语言提问（如「帮我理解 600519 现在多空双方的理由和风险」），系统返回：一场可读的辩论
+    （多头/空头/宏观/风控逐条论据 + 证据）、一张分歧地图、每条论据的审计印章、以及明确的风险边界与免责。
+    <b class="rev">全程不给买卖操作、不给目标价、不承诺收益</b>；输出中 <code>gives_investment_advice=false</code>
+    是可被程序校验的字段。</p>
+
+  <h2 id="4"><span class="n">04</span>真量化引擎（核心差异化）</h2>
+  <p>这是本项目与「AI 套壳」的分水岭：辩论论据不是种子生成的假数字，而是<b>从真实 panda_data 行情实算</b>。
+    引擎在 <b class="cy">24 只 A 股 × 726 个交易日（2022-01 ~ 2024-12）</b>上，对一个因子库计算横截面
+    rank IC、t 检验、样本内/外分离与多空回测。真实结果如下（诚实到不讨好）：</p>
+  <table>
+    <tr><th>因子</th><th>样本内 IC (t)</th><th>样本外 IC (t)</th><th>多空夏普</th><th>最大回撤</th><th>判定</th></tr>
+    <tr><td>动量加速</td><td class="num rd">+0.047 (3.04)</td><td class="num rd">−0.027 (−1.2)</td><td class="num">0.47</td><td class="num">−22%</td><td class="rev">⚑ 过拟合</td></tr>
+    <tr><td>低波动</td><td class="num">+0.026 (1.73)</td><td class="num gd">+0.029 (1.45)</td><td class="num">0.03</td><td class="num">−37%</td><td class="gd">稳健</td></tr>
+    <tr><td>20日动量</td><td class="num">−0.011 (−0.75)</td><td class="num">+0.040 (1.94)</td><td class="num">0.46</td><td class="num">−18%</td><td>—</td></tr>
+    <tr><td>60日动量</td><td class="num">−0.064 (−4.24)</td><td class="num">+0.038 (1.63)</td><td class="num">0.01</td><td class="num">−36%</td><td>反转</td></tr>
+  </table>
+  <div class="callout"><span class="l">诚实性即可信度</span>
+    <p style="margin:6px 0 0">2022–2024 A 股整体下行，多数动量因子在这段几乎无效（t 值不显著）。<b>我们不掩饰</b>——
+      恰恰是这种「连自己多头挑的因子都敢拆」的诚实 + 样本外验证，比任何漂亮的假数字都硬。</p></div>
+
+  <h3>审计的回报：不只批评，更改进结果</h3>
+  <p>审计剔除被判过拟合的因子（动量加速），把<b>放行的稳健因子等权合成组合</b>（横截面 z-score）。
+    对比朴素挑法（样本内最佳 = 过拟合的动量加速）：</p>
+  <table>
+    <tr><th>策略</th><th>样本外 IC (t)</th><th>含义</th></tr>
+    <tr><td>朴素：挑样本内最佳因子</td><td class="num rd">−0.027 (−1.2)</td><td>样本外预测力为负——被过拟合骗了</td></tr>
+    <tr><td><b>审计后：稳健因子合成组合</b></td><td class="num gd">+0.043 (2.02)</td><td>样本外预测力<b class="gd">显著为正</b>——审计让预测真的更可信</td></tr>
+  </table>
+  <div class="chart">
+    <svg viewBox="0 0 1000 200" style="width:100%;height:auto" preserveAspectRatio="none">
+      <line x1="0" y1="8" x2="1000" y2="8" stroke="#2e383f" stroke-width="1" stroke-dasharray="4 4"/>
+      <polyline fill="none" stroke="#1ba8b0" stroke-width="2.4" points="0,30.8 89,20.2 178,77.3 267,139.9 356,134.6 444,124.4 533,176.8 622,174.7 711,157.1 800,170.5 889,151.6 1000,150.9"/>
+    </svg>
+    <div class="cap">↑ 稳健组合多空净值（真实回测，10bps/边成本，换手 0.27）。注：熊市中 IC 转正但绝对收益仍承压——这是诚实的，我们区分「预测力」与「择时收益」。</div>
+  </div>
+
+  <h3>分层回测与稳定性诊断（因子研究的标准动作）</h3>
+  <p>除 IC/t 检验外，引擎还做量化研究的标准诊断——全部真实计算：</p>
+  <div class="grid2">
+    <div class="chart">
+      <div style="font-family:var(--mono);font-size:12px;color:var(--sub);margin-bottom:8px">分层回测 · 20日动量 · 5 档平均收益(bps)</div>
+      <svg viewBox="0 0 1000 130" style="width:100%;height:auto">
+        <line x1="0" y1="80" x2="1000" y2="80" stroke="#2e383f" stroke-width="1"/>
+        <rect x="60" y="45" width="80" height="35" fill="#8592a0"/><text x="100" y="98" fill="#8592a0" font-size="12" text-anchor="middle" font-family="var(--mono)">Q1 +20</text>
+        <rect x="260" y="80" width="80" height="28" fill="#ef5f4e"/><text x="300" y="122" fill="#8592a0" font-size="12" text-anchor="middle" font-family="var(--mono)">Q2 −16</text>
+        <rect x="460" y="70" width="80" height="10" fill="#8592a0"/><text x="500" y="98" fill="#8592a0" font-size="12" text-anchor="middle" font-family="var(--mono)">Q3 +6</text>
+        <rect x="660" y="79" width="80" height="2" fill="#8592a0"/><text x="700" y="98" fill="#8592a0" font-size="12" text-anchor="middle" font-family="var(--mono)">Q4 0</text>
+        <rect x="860" y="4" width="80" height="76" fill="#1ba8b0"/><text x="900" y="98" fill="#1ba8b0" font-size="12" text-anchor="middle" font-family="var(--mono)">Q5 +44</text>
+      </svg>
+      <div class="cap">顶档(Q5)显著跑赢底档(Q1)，头−尾 +24bps——因子有真实分层能力。</div>
+    </div>
+    <div class="box">
+      <h4>稳定性诊断（真实计算）</h4>
+      <p style="margin:6px 0 0;font-size:13.5px;line-height:1.8">
+        <b>滚动 IC</b>（动量加速）：前半期 <span class="gd">+0.031</span> → 后半期 <span class="rd">+0.005</span>——
+        信号随时间衰减，这正是它样本外崩塌的根源。<br>
+        <b>因子相关性</b>：库内平均 |corr| = <b>0.294</b>（低）——因子彼此不冗余，
+        稳健组合是真的在<b class="cy">分散信息</b>，不是重复下注。<br>
+        <b>IC 衰减</b>：多期限 forward IC（1/3/5/10/20 日）随持有期变化，刻画信号快慢。
+      </p>
+    </div>
+  </div>
+
+  <h2 id="5"><span class="n">05</span>审计方法论：抓假与改进</h2>
+  <p>审计 Agent 是全场唯一「别人没有」的东西。它不信任取证 Agent 的自我陈述，而是<b>独立重新计算并复核</b>：</p>
+  <table>
+    <tr><th>维度</th><th>方法（真实计算 / 真 QuantSkills）</th><th>抓什么</th></tr>
+    <tr><td class="mono">过拟合</td><td>因子样本内/外 IC 分离 + t 检验（real-quant）</td><td>样本内显著、样本外崩塌/翻负</td></tr>
+    <tr><td class="mono">坏数据</td><td>corporate-action-adjustment-auditor（real-cli）</td><td>真实数据里的未复权除权跳空</td></tr>
+    <tr><td class="mono">选择/存活偏差</td><td>survivorship-universe-auditor</td><td>只挑赢家、遗漏退市样本</td></tr>
+  </table>
+  <p><b>真实抓假示例</b>（可复现）：</p>
+  <pre><span class="c"># 过拟合（real-quant，样本外验证）</span>
+BULL 挑「动量加速」：样本内 IC=0.047 (t=3.04 显著)
+AUDIT 独立跑样本外 → IC=<span class="k">−0.027 (t=−1.2)</span>　⚑ SUSPECTED-OVERFIT　“背答案，不是规律”
+
+<span class="c"># 坏数据（real-cli，真实 QuantSkills 在真实数据上）</span>
+300750 宁德时代 → <span class="k">large_unexplained_raw_price_jump</span>　⚑ 未复权除权跳空 −41.8%</pre>
+  <p>每条审计结论带 <b>provenance</b>：<span class="tag real">real-quant</span> / <span class="tag real">real-cli</span> /
+    <span class="tag">mock-fallback</span> / <span class="tag">mock</span>——评委可一眼分辨真算还是启发式，可追溯、不套壳。</p>
+
+  <h2 id="6"><span class="n">06</span>核心机制：对抗辩论（真协作，非串联）</h2>
+  <pre>用户提问 → 标的解析
+  ├─ <span class="k">BULL</span>  挑样本内最佳因子（真实 IC/IR/回测）  ┐
+  ├─ <span class="k">BEAR</span>  真实波动率 / 最大回撤 / 流动性        │ 并行取证
+  ├─ <span class="k">MACRO</span> 风格/环境背景                        │ asyncio.gather
+  └─ <span class="k">RISK</span>  敞口与合规边界                        ┘
+        ↓
+  <span class="k">AUDIT（独立复核，可打回）</span> 样本外验证 · 复权审计 · 存活偏差
+        ↓
+  <span class="k">CHAIR（收敛）</span> → 共识 / 未解分歧 / 风险边界 → compliance.enforce()</pre>
+  <p>四方并行取证（非固定链路）；审计独立复核、可打回。总响应受 <b>18 分钟全局预算 + 每 Agent 超时</b>约束，
+    SSE 流式先吐进度——满足 A2A 赛道「响应 &lt;20min、评审期在线」的硬要求。</p>
+
+  <h2 id="7"><span class="n">07</span>技术架构</h2>
+  <div class="grid2">
+    <div class="box"><h4>真量化引擎 backend/quant/</h4><p style="margin:0">面板对齐 · 因子库 · 横截面 IC/t 检验 ·
+      样本内外分离 · IC 衰减 · 多空回测（夏普/回撤/换手/成本）· 稳健组合。全部 numpy 实算。</p></div>
+    <div class="box"><h4>A2A 服务层</h4><p style="margin:0">FastAPI 自托管。<code>/a2a</code>(JSON+SSE) ·
+      <code>/.well-known/agent-card.json</code> · <code>/healthz</code> · <code>/research</code>（真因子报告）。</p></div>
+    <div class="box"><h4>三模式开关</h4><p style="margin:0"><code>LLM_MODE</code> / <code>DATA_MODE</code> /
+      <code>SKILL_MODE</code>——mock↔real 是配置切换，不是重写。数据 7 天窗口内预热落缓存。</p></div>
+    <div class="box"><h4>可解释性</h4><p style="margin:0">每次输出附 <code>skills_manifest</code> +
+      provenance：每条结论回链到具体计算/skill 与数据窗口。</p></div>
+  </div>
+
+  <h2 id="8"><span class="n">08</span>合规与稳健性</h2>
+  <ul>
+    <li><b>合规闸</b>：代码级拦截买卖/收益/目标价/荐股，强制风险免责，审计标记可见。</li>
+    <li><b>机器可校验立场</b>：<code>gives_investment_advice=false</code> · <code>recommendation=null</code>。</li>
+    <li><b>三层降级</b>：单次 LLM 抽风→占位文本；单 Agent 故障→该方不出论据；整场异常→结构化错误不裸崩。</li>
+    <li><b>安全</b>：Bearer 常量时间比较、错误脱敏、前端对 LLM 输出 XSS 转义。</li>
+  </ul>
+
+  <h2 id="9"><span class="n">09</span>工程证据</h2>
+  <div class="grid2">
+    <div class="box"><h4>后端 · 63 项 · 高覆盖</h4><p style="margin:0">量化引擎（IC/回测/过拟合/组合）·
+      合规 · 端到端 · 真实 skill CLI · LLM 单元+集成 · 数据缓存 · panda 解析 · 服务健壮性 · 安全。</p></div>
+    <div class="box"><h4>前端 · 24 项（jsdom）</h4><p style="margin:0">渲染 · 数据可视化 SVG · 审计标红+严重度环 ·
+      REAL provenance 徽章 · XSS 转义 · diverging 分歧地图 · 双视图。</p></div>
+  </div>
+  <p>另有公网就绪自检脚本、一键真模式切换、现场 demo 排练器与标的应对速查表。
+    <b>不是概念 PPT——评委随口给标的，现在就能真机跑，每个数字可在 <code>/research</code> 复现。</b></p>
+
+  <h2 id="10"><span class="n">10</span>多赛道策略</h2>
+  <p>一个 artifact 的五个切面，而非五份工作：后端(18 PandaAI) / 前端(15 度小满) / 怎么造(04 Qoder 多智能体开发) /
+    谁做的(05 智能少年) / 过程(07 小红书) + 主题 E。现金池合计 ≈160k，现实目标命中 1–3 条获奖档。</p>
+
+  <h2 id="11"><span class="n">11</span>团队与愿景</h2>
+  <p>两个 14 岁自学者 + 两个大学生。产品源于一个真实的少年困惑——<b>「我们看不懂大人的投顾」</b>。
+    愿景：让「判断力」而非「结论」成为普惠理财教育的核心；这套「对抗辩论 + 独立审计 + 样本外验证」的认知框架，
+    可迁移到金融之外任何需要「教人分辨真伪」的领域。</p>
+
+  <h2 id="12"><span class="n">附录</span>接口与技能</h2>
+  <h3>接入的真实 QuantSkills（github.com/quantskills）</h3>
+  <p class="mono" style="font-size:12.5px;color:var(--sub)">factor-ranking-sage · residual-guided-factor-selection ·
+    portfolio-liquidity-stress-test · index-rebalance-event-study · corporate-action-adjustment-auditor ·
+    survivorship-universe-auditor · model-hpo-evidence-driven · dalio-all-weather · templeton-global-contrarian</p>
+  <h3>接口</h3>
+  <pre>POST /a2a  { "skill": "debate_case", "topic": "600519 多空双方与风险" }
+POST /a2a  { "skill": "audit_claims", "topic": "审计这几条论据" }
+GET  /research                          <span class="c"># 真因子报告 + 回测净值，可验证每个数字</span>
+GET  /.well-known/agent-card.json       <span class="c"># 公网可访问，streaming: true</span></pre>
+
+  <div class="foot">反方 · The Devil's Committee · AI 投资辩论庭　|　TEAM ADVX2026　|
+    本白皮书仅供学习与研究，不构成任何投资建议。历史数据不代表未来表现。<br>
+    浏览器打印本页（Ctrl/Cmd+P）即可导出 PDF。所有量化数字可在 <code>/research</code> 端点复现。</div>
+
+</div>
+</body>
+</html>

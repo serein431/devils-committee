@@ -1,0 +1,47 @@
+{
+  "name": "Devil's Committee — AI Investment Debate Coach",
+  "description": "An adversarial multi-agent debate committee for retail financial literacy. Bull/Bear/Macro/Risk agents argue a ticker using verified QuantSkills; an Audit agent independently checks each claim for overfitting, selection/survivorship bias and bad data; a Chair agent surfaces consensus, open disagreements and risk boundaries. It does NOT give buy/sell advice — it teaches you to judge. Research/education only, not investment advice.",
+  "version": "0.1.0",
+  "url": "http://localhost:8080/a2a",
+  "provider": {
+    "organization": "Team ADVX2026 (2x14yo + 2 undergrads)",
+    "url": "https://TODO-your-xiaohongshu-or-github"
+  },
+  "documentationUrl": "https://TODO-your-repo/README.md",
+  "defaultInputModes": ["text/plain", "application/json"],
+  "defaultOutputModes": ["application/json", "text/plain"],
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "skills": [
+    {
+      "id": "debate_case",
+      "name": "debate_case",
+      "description": "Run a full adversarial debate on a given ticker/portfolio question. Returns bull/bear/macro/risk arguments (each with evidence + cited QuantSkills), the audit verdict per claim, and a chair synthesis (consensus / open disagreements / risk boundaries). Never returns a buy/sell recommendation.",
+      "tags": ["finance", "multi-agent", "debate", "research", "education"],
+      "examples": [
+        "帮我理解一下 600519 现在多空双方各自的理由和风险",
+        "Explain both the bull and bear case for AAPL and audit which arguments are weak"
+      ],
+      "inputModes": ["text/plain"],
+      "outputModes": ["application/json"]
+    },
+    {
+      "id": "audit_claims",
+      "name": "audit_claims",
+      "description": "Given a set of factor-based investment claims, independently check each for overfitting, selection/survivorship bias and bad data using QuantSkills audit workflows. Returns pass / suspected_overfit / selection_bias / bad_data / thin_data with reasoning. Never writes missing evidence up as pass.",
+      "tags": ["audit", "overfitting", "selection-bias", "integrity"],
+      "examples": [
+        "审计这几条看多论据，哪些是挑出来的因子"
+      ],
+      "inputModes": ["application/json"],
+      "outputModes": ["application/json"]
+    }
+  ],
+  "securitySchemes": {
+    "bearer": { "type": "http", "scheme": "bearer" }
+  },
+  "security": [{ "bearer": [] }],
+  "_notes": "TODO(feishu): align exact fields with the official sample Agent Card from the PandaAI Feishu group; A2A spec places this at /.well-known/agent-card.json. The server injects the live `url` from PUBLIC_URL at runtime."
+}
