@@ -7,6 +7,9 @@ htmlcov/
 .env
 .cache/
 vendor/
+var/cache/
+var/precomputed/
+var/live-records/
 *.log
 .DS_Store
 node_modules/

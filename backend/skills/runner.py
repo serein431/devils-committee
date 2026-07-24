@@ -26,6 +26,7 @@ from .contracts import MarketDataBundle, SkillResult
 from .data import get_stock_daily, DailyBars, stable_seed
 from .online import ONLINE_SKILLS, OnlineSkillRunner
 from .panda import build_market_data_bundle
+from .precomputed import FACTOR_SKILL, HPO_SKILL, PrecomputedStore
 
 
 @dataclass
@@ -47,10 +48,16 @@ class SkillRunner:
         online = await OnlineSkillRunner(CONFIG.skill_timeout_sec).run_all(
             request, bundle
         )
+        store = PrecomputedStore(CONFIG.precomputed_dir, CONFIG.build_commit)
+        precomputed = [
+            store.load(FACTOR_SKILL, request.symbol),
+            store.load(HPO_SKILL, request.symbol),
+        ]
+        all_results = [*online, *precomputed]
         return ResearchEvidence(
             request,
             bundle,
-            {item.skill_id: item for item in online},
+            {item.skill_id: item for item in all_results},
         )
 
     # -- data -----------------------------------------------------------------
