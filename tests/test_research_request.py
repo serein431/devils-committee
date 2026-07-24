@@ -9,7 +9,7 @@ def test_normalizes_supported_a_share_symbols():
 
 def test_marks_hk_and_us_as_unsupported():
     assert normalize_symbol("00700.HK") == ("00700.HK", "unsupported")
-    assert normalize_symbol("NVDA") == ("NVDA", "unsupported")
+    assert normalize_symbol("WXYZ") == ("WXYZ", "unsupported")
     assert normalize_symbol("AI") == ("AI", "unsupported")
 
 
@@ -27,9 +27,9 @@ def test_text_symbol_allows_chinese_adjacency():
 
 
 def test_text_symbol_skips_non_ticker_words():
-    assert symbol_from_text("BUY AAPL NOW") == ("AAPL", "unsupported")
-    assert symbol_from_text("SELL TSLA") == ("TSLA", "unsupported")
-    assert symbol_from_text("the ETF for NVDA") == ("NVDA", "unsupported")
+    assert symbol_from_text("BUY WXYZ NOW") == ("WXYZ", "unsupported")
+    assert symbol_from_text("SELL QWER") == ("QWER", "unsupported")
+    assert symbol_from_text("the ETF for ZZZZ") == ("ZZZZ", "unsupported")
     assert symbol_from_text("分析 AI 行业") == ("UNKNOWN", "unknown")
 
 

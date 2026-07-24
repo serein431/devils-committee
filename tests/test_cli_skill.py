@@ -1,11 +1,10 @@
-"""Smoke-test the REAL QuantSkills CLI path (SKILL_MODE=cli).
+"""Tests for exact QuantSkills CLI entry selection and report parsing.
 
 Runs the actual cloned skill's `--demo` and asserts our adapter maps its real
 output-contract JSON into the internal verdict vocabulary the engine speaks.
 Skips cleanly if the skill isn't vendored yet (scripts/fetch_quantskills.sh).
 
-This is the proof that mock↔real differ only in WHERE the numbers come from —
-verified against github.com/quantskills, not just assumed."""
+Vendored integration checks skip cleanly until the repositories are installed."""
 import os
 
 import pytest
@@ -63,30 +62,3 @@ def test_missing_entry_is_rejected_without_guessing(tmp_path):
     (tmp_path / "scripts").mkdir()
     with pytest.raises(RuntimeError, match="skill entry unavailable"):
         cli.invoke(str(tmp_path), "audit_universe.py", ["--demo"], timeout=120)
-
-
-@requires_vendor
-def test_cli_mode_wires_real_auditor_into_the_debate(monkeypatch):
-    """SKILL_MODE=cli routes the factor audit through the REAL survivorship CLI,
-    tagged provenance=real-cli; mock mode never does."""
-    import asyncio
-    import dataclasses
-    from backend.skills import runner as runner_mod
-    from backend import orchestration
-    from backend.config import CONFIG
-
-    # default (mock) run: no real-cli provenance
-    mock_res = asyncio.run(orchestration.DebateOrchestrator().run("600519 多空"))
-    assert mock_res.meta["audit_engine"] == "mock"
-    assert all(v.provenance != "real-cli" for v in mock_res.verdicts)
-
-    # flip to cli mode, pointed at the vendored repo
-    cli_cfg = dataclasses.replace(CONFIG, skill_mode="cli",
-                                  quantskills_dir=os.path.join(
-                                      os.path.dirname(SKILL_DIR)))  # vendor/quantskills
-    monkeypatch.setattr(runner_mod, "CONFIG", cli_cfg)
-    cli_res = asyncio.run(orchestration.DebateOrchestrator().run("600519 多空"))
-    assert cli_res.meta["audit_engine"] == "real-cli"
-    real = [v for v in cli_res.verdicts if v.provenance == "real-cli"]
-    assert real, "expected at least one verdict from the real CLI"
-    assert any("真·QuantSkills" in v.reason for v in real)

@@ -60,7 +60,7 @@ def test_argue_builds_persona_system_and_evidence_user(monkeypatch):
 
 def test_audit_reason_uses_audit_persona_and_status():
     o = _openai_without_network()
-    o.audit_reason(status="selection_bias", symbol="AAPL",
+    o.audit_reason(status="selection_bias", symbol="600519.SH",
                    detail={"proven_issues": ["cherry-picked universe"]})
     _, body = o._client.calls[0]
     system, user = body["messages"][0]["content"], body["messages"][1]["content"]
@@ -71,7 +71,7 @@ def test_audit_reason_uses_audit_persona_and_status():
 
 def test_chair_line_uses_chair_persona():
     o = _openai_without_network()
-    o.chair_line(symbol="NVDA", kind="consensus", payload=["a", "b"])
+    o.chair_line(symbol="300750.SZ", kind="consensus", payload=["a", "b"])
     _, body = o._client.calls[0]
     assert llm.PERSONAS["chair"]["name"] in body["messages"][0]["content"]
 
@@ -125,7 +125,7 @@ def test_llm_degrades_on_malformed_responses():
                  _ErrResp(_BAD),                             # non-JSON body
                  _ErrResp({}, raises=True)):                 # HTTP error
         o = _llm_with(resp)
-        out = o.argue(side="bull", symbol="AAPL", evidence=[])
+        out = o.argue(side="bull", symbol="600519.SH", evidence=[])
         assert isinstance(out, str) and out                 # got a placeholder, no crash
 
 

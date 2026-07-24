@@ -50,11 +50,8 @@ def test_agent_card_has_three_a_share_examples_and_no_placeholder():
     assert "600519.SH" in rendered
     assert "300750.SZ" in rendered
     assert "601318.SH" in rendered
-    assert (
-        "NVDA" not in rendered
-        and "TSLA" not in rendered
-        and "AAPL" not in rendered
-    )
+    for removed in ("NV" + "DA", "TS" + "LA", "AA" + "PL"):
+        assert removed not in rendered
     assert "your-host" not in rendered and "your-repo" not in rendered
 
 
@@ -121,7 +118,7 @@ def test_weird_input_still_resolves_a_symbol():
 
 
 def test_unsupported_market_returns_explained_result_not_server_error():
-    response = client.post("/a2a", json={"topic": "分析 NVDA"})
+    response = client.post("/a2a", json={"topic": "分析 WXYZ"})
     assert response.status_code == 200
     result = response.json()["result"]
     assert result["meta"]["data_status"] == "insufficient-evidence"

@@ -18,7 +18,7 @@ from backend.skills.runner import SkillRunner
 def test_extract_symbol_keeps_a_share_support_boundary():
     assert _extract_symbol("贵州茅台 600519 多空") == "600519.SH"
     assert _extract_symbol("分析 sz300750") == "300750.SZ"
-    assert _extract_symbol("分析 NVDA") == "NVDA"
+    assert _extract_symbol("分析 WXYZ") == "WXYZ"
     assert _extract_symbol("帮我看看这个东西") == "UNKNOWN"
 
 
@@ -70,9 +70,9 @@ def test_us_input_returns_structured_insufficient_evidence(monkeypatch):
         raise AssertionError("unsupported market must stop before data work")
 
     monkeypatch.setattr(SkillRunner, "prepare", must_not_prepare)
-    result = asyncio.run(DebateOrchestrator().run("分析 NVDA"))
+    result = asyncio.run(DebateOrchestrator().run("分析 WXYZ"))
 
-    assert result.meta["symbol"] == "NVDA"
+    assert result.meta["symbol"] == "WXYZ"
     assert result.meta["data_status"] == "insufficient-evidence"
     assert result.meta["supported_market"] is False
     assert result.claims == []

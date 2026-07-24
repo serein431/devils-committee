@@ -5,8 +5,6 @@ runs offline and reproducibly (no Date.now/random — seeded by the symbol).
 
 DATA_MODE=panda: real panda_data==0.0.12. Matching requests use verified Parquet
 cache files; cache misses call PandaData and never substitute synthetic bars.
-
-TODO(feishu): confirm exact panda_data auth + method signatures from the group.
 """
 from __future__ import annotations
 
@@ -82,59 +80,6 @@ def _mock_bars(symbol: str, n: int = 250) -> DailyBars:
     return DailyBars(symbol=symbol, dates=dates, close=closes, volume=vols, source="mock")
 
 
-def get_universe_rows(symbol: str) -> tuple[list[dict], str]:
-    """Point-in-time universe rows for the survivorship auditor (SKILL_MODE=cli).
-
-    Schema required by skill-survivorship-universe-auditor:
-      symbol,date,listed_at,delisted_at,return,delisting_return,eligible,stable_id
-
-    DATA_MODE=panda: real membership (TODO(feishu): via get_stock_status_change).
-    DATA_MODE=mock: a small SYNTHETIC universe around the symbol — clearly labeled
-    'mock-synthetic' so a real audit is never mistaken for a real-universe audit.
-    It includes a delisted peer with a missing delisting return, so the REAL
-    auditor honestly reports a survivorship problem to demonstrate the wiring.
-    """
-    if CONFIG.data_mode == "panda":
-        raise NotImplementedError("TODO(feishu): build real universe via panda_data")
-    d = "2024-06-28"
-    rows = [
-        {"symbol": symbol, "date": d, "listed_at": "2001-08-27", "delisted_at": "",
-         "return": "0.012", "delisting_return": "", "eligible": "1", "stable_id": symbol},
-    ]
-    # ~half of symbols carry a delisted peer with missing delisting returns, so the
-    # REAL auditor flags survivorship on those and PASSES the rest — the synthetic
-    # universe discriminates instead of always failing. (Real universe via panda.)
-    if stable_seed(symbol + "surv") % 2 == 0:
-        peer = f"DL{stable_seed(symbol) % 900 + 100}.SH"
-        rows.append({"symbol": peer, "date": d, "listed_at": "2010-01-01",
-                     "delisted_at": d, "return": "", "delisting_return": "",
-                     "eligible": "1", "stable_id": peer})
-    else:
-        good = f"GD{stable_seed(symbol) % 900 + 100}.SH"
-        rows.append({"symbol": good, "date": d, "listed_at": "2015-01-01",
-                     "delisted_at": "", "return": "0.006", "delisting_return": "",
-                     "eligible": "1", "stable_id": good})
-    return rows, "mock-synthetic"
-
-
-def get_adjustment_rows(symbol: str) -> tuple[list[dict], str]:
-    """Rows for skill-corporate-action-adjustment-auditor (SKILL_MODE=cli).
-
-    Schema: symbol,date,close,adj_close,split_factor,cash_dividend.
-    Built from the (mock or real) daily bars. adj_close mirrors close with no
-    split/dividend recorded — so any large raw jump (e.g. the injected ~-15%
-    unadjusted gap) is genuinely unexplained and the REAL auditor flags it.
-    Labeled 'mock-synthetic' in mock mode; never passed off as a real CA ledger.
-    """
-    b = get_stock_daily(symbol)
-    src = "panda" if CONFIG.data_mode == "panda" else "mock-synthetic"
-    rows = [{"symbol": symbol,
-             "date": f"{d[:4]}-{d[4:6]}-{d[6:8]}",
-             "close": c, "adj_close": c, "split_factor": 1, "cash_dividend": 0}
-            for d, c in zip(b.dates, b.close)]
-    return rows, src
-
-
 def get_stock_daily(symbol: str, start_date: str = "20220101",
                     end_date: str = "20241231") -> DailyBars:
     """Fetch daily bars. Mock by default; real panda_data when DATA_MODE=panda.
@@ -182,7 +127,7 @@ def get_stock_daily(symbol: str, start_date: str = "20220101",
 
 
 def _col(df, names: list[str]):
-    """Resolve the first present column (exact panda_data names TODO(feishu))."""
+    """Resolve the first present column from supported PandaData aliases."""
     for n in names:
         try:
             if n in getattr(df, "columns", []) or (hasattr(df, "__contains__") and n in df):

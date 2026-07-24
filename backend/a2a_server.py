@@ -1,17 +1,13 @@
-"""A2A Remote Agent server (track 18 submission form) — FastAPI + SSE.
+"""A2A Remote Agent server with FastAPI, JSON responses, and SSE streaming.
 
 Endpoints:
   GET  /.well-known/agent-card.json   -> the Agent Card (url injected from PUBLIC_URL)
-  GET  /healthz                       -> health check (keep the service ALWAYS ONLINE)
+  GET  /healthz                       -> health check
   POST /a2a                            -> A2A message endpoint; JSON or SSE streaming
-  GET  /                               -> the coach frontend (track 15)
+  GET  /                               -> the coach frontend
 
 Run:  uvicorn backend.a2a_server:app --host 0.0.0.0 --port 8080
-Host publicly (Cloudflare Tunnel / VPS) and put that URL in PUBLIC_URL + the card.
-
-TODO(feishu): align the /a2a request/response envelope with the official A2A
-sample from the PandaAI group and register the URL in their test environment.
-`extract_topic` already accepts several common shapes defensively.
+Set PUBLIC_URL to the deployed HTTPS address so the Agent Card uses that URL.
 """
 from __future__ import annotations
 

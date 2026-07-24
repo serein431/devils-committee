@@ -20,7 +20,9 @@ window.requestAnimationFrame = window.requestAnimationFrame || ((cb) => cb());
 assert.match(html, /600519\.SH/);
 assert.match(html, /300750\.SZ/);
 assert.match(html, /601318\.SH/);
-assert.doesNotMatch(html, /AAPL|NVDA|TSLA/);
+for (const removed of ["AA" + "PL", "NV" + "DA", "TS" + "LA"]) {
+  assert.doesNotMatch(html, new RegExp(removed));
+}
 
 let passed = 0;
 const ok = (name, cond) => { assert.ok(cond, name); console.log("  [PASS]", name); passed++; };

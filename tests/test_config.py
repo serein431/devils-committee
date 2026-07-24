@@ -22,18 +22,18 @@ def _load(text: str, keys: list[str]) -> dict:
 
 def test_inline_comments_are_stripped():
     got = _load("LLM_MODE=mock            # mock | openai\n"
-                "LLM_API_KEY=             # TODO(feishu)\n",
+                "LLM_API_KEY=             # intentionally blank\n",
                 ["LLM_MODE", "LLM_API_KEY"])
     assert got["LLM_MODE"] == "mock"        # not 'mock   # mock | openai'
-    assert got["LLM_API_KEY"] == ""         # not '# TODO(feishu)'
+    assert got["LLM_API_KEY"] == ""
 
 
 def test_real_values_and_quotes_survive():
     got = _load('LLM_API_KEY="sk-abc123"\n'
-                "LLM_BASE_URL=https://api.deepseek.com/v1\n",
+                "LLM_BASE_URL=https://example.invalid/v1\n",
                 ["LLM_API_KEY", "LLM_BASE_URL"])
     assert got["LLM_API_KEY"] == "sk-abc123"
-    assert got["LLM_BASE_URL"] == "https://api.deepseek.com/v1"   # no '#', untouched
+    assert got["LLM_BASE_URL"] == "https://example.invalid/v1"
 
 
 def test_real_runtime_defaults_are_used_when_environment_is_empty(monkeypatch):
