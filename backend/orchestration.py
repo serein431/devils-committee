@@ -22,6 +22,7 @@ from .config import CONFIG
 from .llm import get_llm
 from .models import Claim, AuditVerdict, DebateResult
 from .plain import plain_claim
+from .research_request import symbol_from_text
 from .skills.runner import SkillRunner
 
 GLOBAL_BUDGET_SEC = 18 * 60          # 2-min margin under the 20-min cap
@@ -253,33 +254,8 @@ def _mono() -> float:
     return time.monotonic()
 
 
-# Common all-caps words users type that are NOT tickers (so "BUY AAPL" -> AAPL).
-_NON_TICKER = {
-    "BUY", "SELL", "HOLD", "NOW", "THE", "AND", "FOR", "VS", "US", "USD", "CNY",
-    "AI", "IPO", "ETF", "CEO", "CFO", "PE", "PB", "EPS", "ROE", "ROI", "YOY",
-    "Q1", "Q2", "Q3", "Q4", "A", "I", "OK", "WHY", "HOW",
-}
-
-
 def _extract_symbol(topic: str) -> str:
-    """Pull a ticker out of a natural-language question; fall back to the topic.
-
-    Handles: bare 600519 / 600519.SH / sh600519 / sz000001 (A-share), and US
-    tickers while skipping common all-caps English words (BUY/SELL/NOW/…)."""
-    import re
-    # A-share: optional sh/sz prefix, 6 digits, optional .SH/.SZ suffix
-    m = re.search(r"(?i)\b(?:(s[hz])\s*)?(\d{6})(?:\.(s[hz]))?\b", topic)
-    if m:
-        digits = m.group(2)
-        suf = (m.group(3) or m.group(1) or "").upper()      # explicit suffix/prefix
-        if not suf:
-            suf = "SH" if digits[0] == "6" else "SZ"        # infer from leading digit
-        return f"{digits}.{suf}"
-    # US ticker: first 1-5 uppercase token that isn't a common English word
-    for m in re.finditer(r"\b([A-Z]{1,5})\b", topic):
-        if m.group(1) not in _NON_TICKER:
-            return m.group(1)
-    return topic.strip()[:16] or "UNKNOWN"
+    return symbol_from_text(topic)[0]
 
 
 # quick local smoke test

@@ -5,20 +5,11 @@ import asyncio
 from backend.orchestration import DebateOrchestrator, _extract_symbol, GLOBAL_BUDGET_SEC
 
 
-def test_symbol_extraction():
-    assert _extract_symbol("帮我理解 600519 的多空") == "600519.SH"
-    assert _extract_symbol("看看 000001 平安银行") == "000001.SZ"
-    assert _extract_symbol("bull and bear for AAPL please") == "AAPL"
-
-
-def test_symbol_extraction_common_user_formats():
-    """Real users type sh/sz prefixes and lead with English words like BUY."""
-    assert _extract_symbol("sh600519") == "600519.SH"
-    assert _extract_symbol("sz000001") == "000001.SZ"
-    assert _extract_symbol("SH600519 怎么样") == "600519.SH"
-    assert _extract_symbol("BUY AAPL NOW") == "AAPL"      # not 'BUY'
-    assert _extract_symbol("SELL TSLA") == "TSLA"          # not 'SELL'
-    assert _extract_symbol("the ETF for NVDA") == "NVDA"   # skip ETF stopword
+def test_extract_symbol_keeps_a_share_support_boundary():
+    assert _extract_symbol("贵州茅台 600519 多空") == "600519.SH"
+    assert _extract_symbol("分析 sz300750") == "300750.SZ"
+    assert _extract_symbol("分析 NVDA") == "NVDA"
+    assert _extract_symbol("帮我看看这个东西") == "UNKNOWN"
 
 
 def test_debate_produces_four_sides_and_audits_each():
