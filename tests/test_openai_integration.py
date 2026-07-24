@@ -28,11 +28,15 @@ def _install_fake_openai(monkeypatch):
     return calls
 
 
-def test_full_debate_runs_through_openai_path(monkeypatch):
+def test_full_debate_runs_through_openai_path(monkeypatch, evidence_fixture):
     calls = _install_fake_openai(monkeypatch)
-    # orchestration imports get_llm at call time via llm_mod.get_llm
     from backend import orchestration
     monkeypatch.setattr(orchestration, "get_llm", llm_mod.get_llm)
+
+    async def prepare(self, request):
+        return evidence_fixture
+
+    monkeypatch.setattr(orchestration.SkillRunner, "prepare", prepare)
 
     r = asyncio.run(orchestration.DebateOrchestrator().run("600519 多空"))
 
@@ -44,14 +48,17 @@ def test_full_debate_runs_through_openai_path(monkeypatch):
     assert r.disclaimer and r.meta["gives_investment_advice"] is False
 
 
-def test_openai_audit_reasons_route_through_llm(monkeypatch):
+def test_openai_audit_reasons_route_through_llm(monkeypatch, evidence_fixture):
     _install_fake_openai(monkeypatch)
     from backend import orchestration
     monkeypatch.setattr(orchestration, "get_llm", llm_mod.get_llm)
 
-    r = asyncio.run(orchestration.DebateOrchestrator().run("NVDA 多空"))
+    async def prepare(self, request):
+        return evidence_fixture
+
+    monkeypatch.setattr(orchestration.SkillRunner, "prepare", prepare)
+
+    r = asyncio.run(orchestration.DebateOrchestrator().run("600519 多空"))
     flagged = r.audit_flags()
-    # a mock-provenance flag's reason is phrased by the (fake) openai LLM
-    mock_flags = [v for v in flagged if v.provenance != "real-cli"]
-    assert mock_flags, "expected at least one non-cli flag on NVDA"
-    assert any(v.reason.startswith("[OPENAI:audit]") for v in mock_flags)
+    assert flagged
+    assert any(v.reason.startswith("[OPENAI:audit]") for v in flagged)

@@ -128,7 +128,7 @@ class AuditVerdict:
     audit_skill: str = ""            # which QuantSkills auditor produced the verdict
     severity: Literal["none", "low", "medium", "high"] = "none"
     remediation: str = ""            # how the owning agent could fix / re-argue
-    provenance: str = "mock"         # mock | mock-fallback | real-cli — who computed it
+    provenance: str = "mock"         # live | cache | precomputed | mock
     plain: str = ""                  # beginner analogy for the verdict (15 命门)
 
     @property

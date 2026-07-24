@@ -1,255 +1,533 @@
-"""Debate orchestration: parallel evidence -> independent audit -> convergence.
+"""Run one evidence preparation, parallel debate, audit and convergence."""
 
-The '真协作，非串联' proof for track 18:
-  1. Bull/Bear/Macro/Risk gather evidence IN PARALLEL (asyncio.gather), not a chain.
-  2. The Audit agent INDEPENDENTLY reviews every claim and can bounce weak ones.
-  3. The Chair converges into consensus / open disagreements / risk boundaries.
-
-Hard constraint (18): total response <= 20 min. Enforced with a global budget +
-per-agent timeouts; streaming emits progress so a judge never stares at a spinner.
-"""
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import Callable
 
-from .agents import (BullAgent, BearAgent, MacroAgent, RiskAgent,
-                     AuditAgent, ChairAgent)
-from .compliance import enforce, scrub, DISCLAIMER
+from .agents import (
+    AuditAgent,
+    BearAgent,
+    BullAgent,
+    ChairAgent,
+    MacroAgent,
+    RiskAgent,
+)
+from .compliance import DISCLAIMER, enforce, enforce_dict, scrub
 from .config import CONFIG
 from .llm import get_llm
-from .models import Claim, AuditVerdict, DebateResult
+from .models import AuditVerdict, Claim, DebateResult
 from .plain import plain_claim
-from .research_request import symbol_from_text
-from .skills.runner import SkillRunner
-
-GLOBAL_BUDGET_SEC = 18 * 60          # 2-min margin under the 20-min cap
-PER_AGENT_TIMEOUT_SEC = 4 * 60
-MAX_AUDIT_ROUNDS = 2
+from .research_request import ResearchRequest, symbol_from_text
+from .skills.runner import ResearchEvidence, SkillRunner
 
 
-async def _timeout(coro, seconds: int, fallback):
-    try:
-        return await asyncio.wait_for(coro, timeout=seconds)
-    except asyncio.TimeoutError:
-        return fallback
+GLOBAL_BUDGET_SEC = CONFIG.request_budget_sec
+PER_AGENT_TIMEOUT_SEC = 120
+MAX_AUDIT_ROUNDS = 1
+
+_PUBLIC_TIMEOUT = "研究请求超过内部时间限制。"
+_PUBLIC_DATA_ERROR = "研究数据暂不可用，请稍后重试。"
+_PUBLIC_INSUFFICIENT = "当前没有足够的授权数据支持研究。"
+_PUBLIC_UNSUPPORTED = "当前真实研究只支持 A 股代码。"
+_NO_MOCK_SUBSTITUTE = "当前结果没有使用模拟数据代替真实证据。"
+
+
+def _empty_result(
+    request: ResearchRequest,
+    *,
+    data_status: str,
+    reason: str,
+    elapsed_sec: float,
+) -> DebateResult:
+    """Build a compliant public result without exposing private failures."""
+
+    manifest = {
+        "data": {
+            "symbol": request.symbol,
+            "status": data_status,
+            "mode": None,
+            "dataset_hashes": [],
+        },
+        "results": [],
+        "all_skills": [],
+    }
+    return enforce(
+        DebateResult(
+            topic=request.question,
+            claims=[],
+            verdicts=[],
+            consensus=[],
+            open_disagreements=[],
+            risk_boundaries=[reason, _NO_MOCK_SUBSTITUTE],
+            elapsed_sec=elapsed_sec,
+            meta={
+                "symbol": request.symbol,
+                "supported_market": request.supported,
+                "data_status": data_status,
+                "modes": [],
+                "n_claims": 0,
+                "n_flags": 0,
+                "audit_engine": [],
+                "gives_investment_advice": False,
+                "recommendation": None,
+                "skills_manifest": manifest,
+            },
+        )
+    )
 
 
 class DebateOrchestrator:
     def __init__(self, emit: Callable[[dict], None] = lambda ev: None) -> None:
         self.runner = SkillRunner()
         self.llm = get_llm()
-        self.bull = BullAgent(self.runner, self.llm)
-        self.bear = BearAgent(self.runner, self.llm)
-        self.macro = MacroAgent(self.runner, self.llm)
-        self.risk = RiskAgent(self.runner, self.llm)
-        self.audit = AuditAgent(self.runner, self.llm)
-        self.chair = ChairAgent(self.runner, self.llm)
+        self.bull = BullAgent(self.llm)
+        self.bear = BearAgent(self.llm)
+        self.macro = MacroAgent(self.llm)
+        self.risk = RiskAgent(self.llm)
+        self.audit = AuditAgent(self.llm)
+        self.chair = ChairAgent(self.llm)
         self.emit = emit
         self.result: DebateResult | None = None
 
-    async def run(self, topic: str) -> DebateResult:
-        """Fast path (JSON / tests): drain the stream, return the final result.
+    async def run(self, topic: str | ResearchRequest) -> DebateResult:
+        """Drain the event stream and return its final compliant result."""
 
-        `emit` still fires for any legacy sync-callback caller."""
-        async for ev in self.stream(topic):
-            self.emit(ev)
+        async for event in self.stream(topic):
+            self.emit(event)
+        if self.result is None:  # Defensive only; every stream branch sets a result.
+            raise RuntimeError("orchestration produced no result")
         return self.result
 
-    async def stream(self, topic: str, pace: float = 0.0):
-        """Truly incremental async generator — yields events AS they are produced.
+    async def stream(
+        self,
+        topic: str | ResearchRequest,
+        pace: float = 0.0,
+    ):
+        """Yield debate events while keeping the whole request in one budget."""
 
-        A claim is emitted the moment its agent finishes (asyncio.as_completed), so
-        a judge watching the SSE sees each side arrive one by one and the audit stamp
-        land live — the 心跳漏拍 moment — instead of everything at once.
+        request = _as_request(topic)
+        started = _mono()
+        deadline = started + GLOBAL_BUDGET_SEC
+        self.result = None
 
-        `pace` inserts a small delay between reveals for demo drama; the real track-18
-        path uses pace=0.0 to stay as fast as possible under the 20-min budget.
-        """
-        symbol = _extract_symbol(topic)
-        t0 = _mono()
+        if not request.supported:
+            self.result = _empty_result(
+                request,
+                data_status="insufficient-evidence",
+                reason=_PUBLIC_UNSUPPORTED,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+            yield {"stage": "result", "result": self.result.to_dict()}
+            return
 
-        # 1) parallel evidence gathering — emit each side as it lands ---------
-        yield {"stage": "argue", "symbol": symbol,
-               "msg": f"六个 Agent 就 {symbol} 并行取证…"}
-        agents = [self.bull, self.bear, self.macro, self.risk]
-        tasks = {asyncio.ensure_future(self._argue(a, symbol)): a.side for a in agents}
-        claims: list[Claim] = []
-        factor_payload: dict = {}
-        for fut in asyncio.as_completed(tasks):
-            side_claims, payload = await fut
-            if payload:
-                factor_payload = payload
-            for c in side_claims:
-                c.plain = plain_claim(c.side)
-                claims.append(c)
-                yield {"stage": "claim", "id": c.id, "agent": c.agent, "side": c.side,
-                       "text": c.text, "plain": c.plain, "confidence": c.confidence,
-                       "skills_used": c.skills_used,
-                       "evidence": [e.to_dict() for e in c.evidence]}
-            if pace:
-                await asyncio.sleep(pace)
+        try:
+            evidence = await asyncio.wait_for(
+                self.runner.prepare(request),
+                timeout=GLOBAL_BUDGET_SEC,
+            )
+        except asyncio.TimeoutError:
+            self.result = _empty_result(
+                request,
+                data_status="error",
+                reason=_PUBLIC_TIMEOUT,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+            yield {"stage": "result", "result": self.result.to_dict()}
+            return
+        except Exception as exc:
+            _log_failure("evidence preparation", exc)
+            self.result = _empty_result(
+                request,
+                data_status="error",
+                reason=_PUBLIC_DATA_ERROR,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+            yield {"stage": "result", "result": self.result.to_dict()}
+            return
 
-        # 2) independent audit + bounce weak claims (the differentiator) ------
-        verdicts: list[AuditVerdict] = []
-        for round_i in range(MAX_AUDIT_ROUNDS):
-            if _mono() - t0 > GLOBAL_BUDGET_SEC:
-                break
-            yield {"stage": "audit", "round": round_i,
-                   "msg": "审计 Agent 独立复核每一条论据…"}
-            if pace:
-                await asyncio.sleep(pace)
-            verdicts = await self.audit.audit(symbol, claims, factor_payload)
-            for v in verdicts:
-                if not v.passed:
-                    yield {"stage": "audit_flag", "claim_id": v.claim_id,
-                           "status": v.status, "reason": v.reason,
-                           "severity": v.severity, "remediation": v.remediation,
-                           "plain": v.plain, "provenance": v.provenance,
-                           "audit_skill": v.audit_skill}
-                    if pace:
-                        await asyncio.sleep(pace)
-            weak = [v for v in verdicts if v.status == "suspected_overfit"]
-            if not weak:
-                break
-            yield {"stage": "rebuttal",
-                   "msg": f"{len(weak)} 条论据被打回，要求补证据后重证"}
+        if evidence.bundle.status != "success":
+            self.result = _empty_result(
+                request,
+                data_status="insufficient-evidence",
+                reason=_PUBLIC_INSUFFICIENT,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+            yield {"stage": "result", "result": self.result.to_dict()}
+            return
 
-        # 3) convergence -----------------------------------------------------
-        yield {"stage": "synthesize", "msg": "主持收敛共识与分歧…"}
-        synth = await self.chair.synthesize(symbol, claims, verdicts)
+        try:
+            _require_remaining(deadline)
+            yield {
+                "stage": "argue",
+                "symbol": request.symbol,
+                "msg": f"四个 Agent 就 {request.symbol} 并行研究…",
+            }
+            agents = [self.bull, self.bear, self.macro, self.risk]
+            tasks = [
+                asyncio.create_task(self._argue(agent, evidence, deadline))
+                for agent in agents
+            ]
+            claims: list[Claim] = []
+            for task in asyncio.as_completed(tasks):
+                side_claims = await task
+                for claim in side_claims:
+                    claim.plain = plain_claim(claim.side)
+                    claims.append(claim)
+                    yield {
+                        "stage": "claim",
+                        "id": claim.id,
+                        "agent": claim.agent,
+                        "side": claim.side,
+                        "text": claim.text,
+                        "plain": claim.plain,
+                        "confidence": claim.confidence,
+                        "skills_used": claim.skills_used,
+                        "evidence": [item.to_dict() for item in claim.evidence],
+                    }
+                await _pace_within_budget(pace, deadline)
 
-        result = DebateResult(
-            topic=topic, claims=claims, verdicts=verdicts,
-            consensus=synth["consensus"],
-            open_disagreements=synth["open_disagreements"],
-            risk_boundaries=synth["risk_boundaries"],
-            elapsed_sec=round(_mono() - t0, 2),
-            meta={
-                "symbol": symbol,
-                "modes": CONFIG.summary(),
-                "n_claims": len(claims),
-                "n_flags": len([v for v in verdicts if not v.passed]),
-                "audit_engine": (next((e for e in ("real-quant", "real-cli")
-                                       if any(v.provenance == e for v in verdicts)), "mock")),
-                # Machine-checkable stance (scored by 15 可信度 & 18 失格红线):
-                # this product NEVER advises — it explains and audits.
-                "gives_investment_advice": False,
-                "recommendation": None,
-                "data": self.runner.bars(symbol).to_dict(),
-                "skills_manifest": self._skills_manifest(symbol, claims, verdicts),
-            },
+            verdicts: list[AuditVerdict] = []
+            for round_index in range(MAX_AUDIT_ROUNDS):
+                yield {
+                    "stage": "audit",
+                    "round": round_index,
+                    "msg": "审计 Agent 独立检查每一条论据…",
+                }
+                await _pace_within_budget(pace, deadline)
+                verdicts = await asyncio.wait_for(
+                    self.audit.audit(evidence, claims),
+                    timeout=_require_remaining(deadline),
+                )
+                for verdict in verdicts:
+                    if verdict.passed:
+                        continue
+                    yield {
+                        "stage": "audit_flag",
+                        "claim_id": verdict.claim_id,
+                        "status": verdict.status,
+                        "reason": verdict.reason,
+                        "severity": verdict.severity,
+                        "remediation": verdict.remediation,
+                        "plain": verdict.plain,
+                        "provenance": verdict.provenance,
+                        "audit_skill": verdict.audit_skill,
+                    }
+                    await _pace_within_budget(pace, deadline)
+
+            yield {"stage": "synthesize", "msg": "主持汇总共识与分歧…"}
+            synthesis = await asyncio.wait_for(
+                self.chair.synthesize(request.symbol, claims, verdicts),
+                timeout=_require_remaining(deadline),
+            )
+        except asyncio.TimeoutError:
+            self.result = _empty_result(
+                request,
+                data_status="error",
+                reason=_PUBLIC_TIMEOUT,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+            yield {"stage": "result", "result": self.result.to_dict()}
+            return
+        except Exception as exc:
+            _log_failure("orchestration", exc)
+            self.result = _empty_result(
+                request,
+                data_status="error",
+                reason=_PUBLIC_DATA_ERROR,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+            yield {"stage": "result", "result": self.result.to_dict()}
+            return
+
+        modes = _evidence_modes(evidence)
+        manifest = self._skills_manifest(evidence, claims)
+        self.result = enforce(
+            DebateResult(
+                topic=request.question,
+                claims=claims,
+                verdicts=verdicts,
+                consensus=synthesis["consensus"],
+                open_disagreements=synthesis["open_disagreements"],
+                risk_boundaries=synthesis["risk_boundaries"],
+                elapsed_sec=round(_mono() - started, 2),
+                meta={
+                    "symbol": request.symbol,
+                    "supported_market": request.supported,
+                    "data_status": evidence.bundle.status,
+                    "modes": modes,
+                    "n_claims": len(claims),
+                    "n_flags": sum(1 for item in verdicts if not item.passed),
+                    "audit_engine": modes,
+                    "gives_investment_advice": False,
+                    "recommendation": None,
+                    "data": manifest["data"],
+                    "skills_manifest": manifest,
+                },
+            )
         )
-        self.result = enforce(result)        # compliance gate — always last
-        yield {"stage": "done", "elapsed_sec": self.result.elapsed_sec,
-               "n_flags": self.result.meta["n_flags"]}
+        yield {
+            "stage": "done",
+            "elapsed_sec": self.result.elapsed_sec,
+            "n_flags": self.result.meta["n_flags"],
+        }
         yield {"stage": "result", "result": self.result.to_dict()}
 
-    async def _argue(self, agent, symbol: str):
-        """Normalize every agent's return to (claims, factor_payload).
+    async def _argue(
+        self,
+        agent,
+        evidence: ResearchEvidence,
+        deadline: float,
+    ) -> list[Claim]:
+        """Return no claims when one agent times out or fails privately."""
 
-        Degrades gracefully: a timeout OR any skill/model error in ONE agent must
-        not crash the whole debate (18 命脉：服务不可整场翻车). That side just
-        contributes no claims this round.
-        """
+        timeout = min(PER_AGENT_TIMEOUT_SEC, max(0.0, deadline - _mono()))
+        if timeout <= 0:
+            return []
         try:
-            out = await asyncio.wait_for(agent.argue(symbol), PER_AGENT_TIMEOUT_SEC)
-        except Exception:                        # timeout OR skill/model error; not CancelledError
-            logging.getLogger("devils-committee").warning(
-                "agent %s degraded (no claims this round)", getattr(agent, "side", "?"),
-                exc_info=True)
-            return [], {}
-        if isinstance(out, tuple):               # BullAgent returns (claims, payload)
-            return out[0], out[1]
-        return out, {}
+            return await asyncio.wait_for(agent.argue(evidence), timeout=timeout)
+        except Exception as exc:
+            _log_failure(
+                f"agent {getattr(agent, 'side', '?')}",
+                exc,
+            )
+            return []
 
-    def _skills_manifest(self, symbol: str, claims: list[Claim],
-                         verdicts: list[AuditVerdict]) -> dict:
-        """Traceability (18: '输出可解释' + submission's '用到的 Skills 列表').
+    def _skills_manifest(
+        self,
+        evidence: ResearchEvidence,
+        claims: list[Claim],
+    ) -> dict:
+        """Describe the prepared datasets and every returned Skill result."""
 
-        Every conclusion links back to the exact skill call, the role that used it,
-        the data window, and — for audits — the provenance (mock vs real CLI)."""
-        bars = self.runner.bars(symbol)
-        # evidence skills -> which roles cited them
-        evidence: dict[str, set] = {}
-        for c in claims:
-            for e in c.evidence:
-                evidence.setdefault(e.skill, set()).add(c.agent)
-        evidence_skills = [{"skill": s, "used_by": sorted(roles)}
-                           for s, roles in sorted(evidence.items())]
-        # audit skills -> which claims they judged + provenance
-        audit: dict[str, dict] = {}
-        for v in verdicts:
-            if not v.audit_skill:
-                continue
-            a = audit.setdefault(v.audit_skill, {"verdict_for": [], "provenance": set()})
-            a["verdict_for"].append(v.claim_id)
-            a["provenance"].add(v.provenance)
-        audit_skills = [{"skill": s, "verdict_for": sorted(a["verdict_for"]),
-                         "provenance": sorted(a["provenance"])}
-                        for s, a in sorted(audit.items())]
+        used_by: dict[str, set[str]] = {}
+        for claim in claims:
+            for skill_id in claim.skills_used:
+                used_by.setdefault(skill_id, set()).add(claim.agent)
+
+        results = []
+        for skill_id, result in sorted(evidence.results.items()):
+            results.append(
+                {
+                    "skill_id": skill_id,
+                    "status": result.status,
+                    "mode": result.mode,
+                    "duration_ms": result.duration_ms,
+                    "dataset_hashes": list(result.dataset_hashes),
+                    "used_by": sorted(used_by.get(skill_id, set())),
+                    "assumptions": list(result.assumptions),
+                    "warnings": list(result.warnings),
+                }
+            )
         return {
-            "data": {"symbol": symbol,
-                     "window": f"{bars.dates[0]}..{bars.dates[-1]}" if bars.dates else None,
-                     "source": bars.source, "n_bars": bars.n},
-            "evidence_skills": evidence_skills,
-            "audit_skills": audit_skills,
-            "all_skills": sorted(set(list(evidence) + list(audit))),
+            "data": {
+                "symbol": evidence.request.symbol,
+                "status": evidence.bundle.status,
+                "mode": evidence.bundle.mode,
+                "dataset_hashes": evidence.bundle.dataset_hashes,
+            },
+            "results": results,
+            "all_skills": sorted(evidence.results),
         }
 
-    async def audit_claims(self, topic: str) -> dict:
-        """The card's second advertised skill: independently audit the factor/price
-        claims for a ticker and return per-claim verdicts (no chair synthesis).
+    async def audit_claims(self, topic: str | ResearchRequest) -> dict:
+        """Prepare once, generate shared-evidence claims and audit them once."""
 
-        Same audit engine as debate_case, so a judge calling either advertised skill
-        gets consistent, provenance-tagged results. Compliance-scrubbed.
-        """
-        symbol = _extract_symbol(topic)
-        t0 = _mono()
-        agents = [self.bull, self.bear, self.macro, self.risk]
-        gathered = await asyncio.gather(*(self._argue(a, symbol) for a in agents))
-        claims: list[Claim] = []
-        factor_payload: dict = {}
-        for side_claims, payload in gathered:
-            claims.extend(side_claims)
-            if payload:
-                factor_payload = payload
-        for c in claims:
-            c.plain = plain_claim(c.side)
-        verdicts = await self.audit.audit(symbol, claims, factor_payload)
-        by_id = {c.id: c for c in claims}
-        audits = [{
-            "claim_id": v.claim_id,
-            "agent": (by_id[v.claim_id].agent if v.claim_id in by_id else v.claim_id),
-            "side": (by_id[v.claim_id].side if v.claim_id in by_id else ""),
-            "claim": scrub(by_id[v.claim_id].text) if v.claim_id in by_id else "",
-            "claim_plain": by_id[v.claim_id].plain if v.claim_id in by_id else "",
-            "status": v.status,
-            "severity": v.severity,
-            "reason": scrub(v.reason),
-            "plain": v.plain,
-            "remediation": scrub(v.remediation),
-            "audit_skill": v.audit_skill,
-            "provenance": v.provenance,
-        } for v in verdicts]
-        return {
-            "symbol": symbol,
-            "audits": audits,
-            "n_claims": len(claims),
-            "n_flags": sum(1 for v in verdicts if not v.passed),
-            "audit_engine": ("real-cli" if any(v.provenance == "real-cli"
-                                               for v in verdicts) else "mock"),
+        request = _as_request(topic)
+        started = _mono()
+        deadline = started + GLOBAL_BUDGET_SEC
+
+        if not request.supported:
+            return _empty_audit_payload(
+                request,
+                data_status="insufficient-evidence",
+                reason=_PUBLIC_UNSUPPORTED,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+
+        try:
+            evidence = await asyncio.wait_for(
+                self.runner.prepare(request),
+                timeout=GLOBAL_BUDGET_SEC,
+            )
+        except asyncio.TimeoutError:
+            return _empty_audit_payload(
+                request,
+                data_status="error",
+                reason=_PUBLIC_TIMEOUT,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+        except Exception as exc:
+            _log_failure("audit evidence preparation", exc)
+            return _empty_audit_payload(
+                request,
+                data_status="error",
+                reason=_PUBLIC_DATA_ERROR,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+
+        if evidence.bundle.status != "success":
+            return _empty_audit_payload(
+                request,
+                data_status="insufficient-evidence",
+                reason=_PUBLIC_INSUFFICIENT,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+
+        try:
+            _require_remaining(deadline)
+            agents = [self.bull, self.bear, self.macro, self.risk]
+            gathered = await asyncio.gather(
+                *(self._argue(agent, evidence, deadline) for agent in agents)
+            )
+            claims = [claim for side_claims in gathered for claim in side_claims]
+            for claim in claims:
+                claim.plain = plain_claim(claim.side)
+            verdicts = await asyncio.wait_for(
+                self.audit.audit(evidence, claims),
+                timeout=_require_remaining(deadline),
+            )
+        except asyncio.TimeoutError:
+            return _empty_audit_payload(
+                request,
+                data_status="error",
+                reason=_PUBLIC_TIMEOUT,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+        except Exception as exc:
+            _log_failure("claim audit", exc)
+            return _empty_audit_payload(
+                request,
+                data_status="error",
+                reason=_PUBLIC_DATA_ERROR,
+                elapsed_sec=round(_mono() - started, 2),
+            )
+
+        by_id = {claim.id: claim for claim in claims}
+        audits = [
+            {
+                "claim_id": verdict.claim_id,
+                "agent": (
+                    by_id[verdict.claim_id].agent
+                    if verdict.claim_id in by_id
+                    else verdict.claim_id
+                ),
+                "side": (
+                    by_id[verdict.claim_id].side
+                    if verdict.claim_id in by_id
+                    else ""
+                ),
+                "claim": (
+                    scrub(by_id[verdict.claim_id].text)
+                    if verdict.claim_id in by_id
+                    else ""
+                ),
+                "claim_plain": (
+                    scrub(by_id[verdict.claim_id].plain)
+                    if verdict.claim_id in by_id
+                    else ""
+                ),
+                "status": verdict.status,
+                "severity": verdict.severity,
+                "reason": scrub(verdict.reason),
+                "plain": scrub(verdict.plain),
+                "remediation": scrub(verdict.remediation),
+                "audit_skill": verdict.audit_skill,
+                "provenance": verdict.provenance,
+            }
+            for verdict in verdicts
+        ]
+        modes = _evidence_modes(evidence)
+        return enforce_dict(
+            {
+                "symbol": request.symbol,
+                "supported_market": request.supported,
+                "data_status": evidence.bundle.status,
+                "audits": audits,
+                "n_claims": len(claims),
+                "n_flags": sum(1 for item in verdicts if not item.passed),
+                "audit_engine": modes,
+                "modes": modes,
+                "gives_investment_advice": False,
+                "recommendation": None,
+                "skills_manifest": self._skills_manifest(evidence, claims),
+                "elapsed_sec": round(_mono() - started, 2),
+                "disclaimer": DISCLAIMER,
+            }
+        )
+
+
+def _empty_audit_payload(
+    request: ResearchRequest,
+    *,
+    data_status: str,
+    reason: str,
+    elapsed_sec: float,
+) -> dict:
+    result = _empty_result(
+        request,
+        data_status=data_status,
+        reason=reason,
+        elapsed_sec=elapsed_sec,
+    )
+    return enforce_dict(
+        {
+            "symbol": request.symbol,
+            "supported_market": request.supported,
+            "data_status": data_status,
+            "audits": [],
+            "n_claims": 0,
+            "n_flags": 0,
+            "audit_engine": [],
+            "modes": [],
             "gives_investment_advice": False,
             "recommendation": None,
-            "skills_manifest": self._skills_manifest(symbol, claims, verdicts),
-            "elapsed_sec": round(_mono() - t0, 2),
-            "disclaimer": DISCLAIMER,
+            "skills_manifest": result.meta["skills_manifest"],
+            "risk_boundaries": result.risk_boundaries,
+            "elapsed_sec": result.elapsed_sec,
+            "disclaimer": result.disclaimer,
         }
+    )
 
 
-# --- helpers ---------------------------------------------------------------
+async def _pace_within_budget(pace: float, deadline: float) -> None:
+    if pace > 0:
+        await asyncio.wait_for(
+            asyncio.sleep(pace),
+            timeout=_require_remaining(deadline),
+        )
+
+
+def _require_remaining(deadline: float) -> float:
+    remaining = deadline - _mono()
+    if remaining <= 0:
+        raise asyncio.TimeoutError
+    return remaining
+
+
+def _evidence_modes(evidence: ResearchEvidence) -> list[str]:
+    modes = {evidence.bundle.mode}
+    modes.update(result.mode for result in evidence.results.values())
+    allowed = {"live", "cache", "precomputed", "mock"}
+    return sorted(mode for mode in modes if mode in allowed)
+
+
+def _as_request(topic: str | ResearchRequest) -> ResearchRequest:
+    if isinstance(topic, ResearchRequest):
+        return topic
+    return ResearchRequest.from_payload({"topic": topic})
+
+
+def _log_failure(stage: str, exc: Exception) -> None:
+    logging.getLogger("devils-committee").warning(
+        "%s failed: %s",
+        stage,
+        type(exc).__name__,
+    )
+
+
 def _mono() -> float:
     return time.monotonic()
 
@@ -258,11 +536,20 @@ def _extract_symbol(topic: str) -> str:
     return symbol_from_text(topic)[0]
 
 
-# quick local smoke test
 if __name__ == "__main__":
     async def _main():
-        orch = DebateOrchestrator(emit=lambda ev: print("[stream]", ev.get("stage"), ev.get("msg", "")))
-        res = await orch.run("帮我理解一下 600519 现在多空双方的理由和风险")
+        orchestrator = DebateOrchestrator(
+            emit=lambda event: print(
+                "[stream]",
+                event.get("stage"),
+                event.get("msg", ""),
+            )
+        )
+        result = await orchestrator.run(
+            "帮我理解一下 600519 现在多空双方的理由和风险"
+        )
         import json
-        print(json.dumps(res.to_dict(), ensure_ascii=False, indent=2)[:2000])
+
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2)[:2000])
+
     asyncio.run(_main())

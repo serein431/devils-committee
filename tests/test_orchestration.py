@@ -1,8 +1,18 @@
-"""End-to-end engine tests: real collaboration (not a chain), independent audit,
-reproducibility, the <=20-min budget wiring, and compliance always last."""
-import asyncio
+"""Debate orchestration budgets, shared evidence and safe failure results."""
 
-from backend.orchestration import DebateOrchestrator, _extract_symbol, GLOBAL_BUDGET_SEC
+import asyncio
+import copy
+
+from backend import compliance
+from backend.orchestration import (
+    GLOBAL_BUDGET_SEC,
+    MAX_AUDIT_ROUNDS,
+    PER_AGENT_TIMEOUT_SEC,
+    DebateOrchestrator,
+    _extract_symbol,
+)
+from backend.research_request import ResearchRequest
+from backend.skills.runner import SkillRunner
 
 
 def test_extract_symbol_keeps_a_share_support_boundary():
@@ -12,110 +22,234 @@ def test_extract_symbol_keeps_a_share_support_boundary():
     assert _extract_symbol("帮我看看这个东西") == "UNKNOWN"
 
 
-def test_debate_produces_four_sides_and_audits_each():
-    r = asyncio.run(DebateOrchestrator().run("600519 多空理由"))
-    sides = {c.side for c in r.claims}
-    assert sides == {"bull", "bear", "macro", "risk"}
-    # every claim gets an independent verdict — audit is not skipped
-    assert {v.claim_id for v in r.verdicts} == {c.id for c in r.claims}
+def test_budget_is_ten_minutes_with_two_minute_agent_limit():
+    assert GLOBAL_BUDGET_SEC == 600
+    assert PER_AGENT_TIMEOUT_SEC == 120
+    assert MAX_AUDIT_ROUNDS == 1
 
 
-def test_killer_feature_stamps_a_claim_red():
-    """The differentiator: the audit agent independently catches a weak claim and
-    stamps it red — and every flag carries a concrete, honest remediation."""
-    r = asyncio.run(DebateOrchestrator().run("600519 多空理由"))
-    flags = r.audit_flags()
-    assert flags, "audit should catch at least one weak claim on this topic"
-    valid = {"selection_bias", "suspected_overfit", "bad_data", "thin_data"}
-    assert all(f.status in valid for f in flags)
-    assert all(f.remediation for f in flags)   # never a bare 'you're wrong'
-    assert all(f.audit_skill for f in flags)    # grounded in a named audit skill
+def test_prepare_runs_once_for_all_agents(monkeypatch, evidence_fixture):
+    calls = {"n": 0}
+
+    async def prepare(self, request):
+        calls["n"] += 1
+        return evidence_fixture
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空"))
+
+    assert calls["n"] == 1
+    assert {claim.side for claim in result.claims} == {
+        "bull",
+        "bear",
+        "macro",
+        "risk",
+    }
+    assert result.meta["data_status"] == "success"
 
 
-def test_audit_can_also_fully_pass():
-    """Not a hardcoded gotcha: some topics survive the audit clean."""
-    r = asyncio.run(DebateOrchestrator().run("TSLA bull bear"))
-    assert r.meta["n_flags"] == 0
+def test_research_request_is_accepted_without_reparsing(monkeypatch, evidence_fixture):
+    request = ResearchRequest.from_payload(
+        {"symbol": "600519.SH", "question": "检查流动性风险"}
+    )
+    seen = []
+
+    async def prepare(self, received):
+        seen.append(received)
+        return evidence_fixture
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run(request))
+
+    assert seen == [request]
+    assert result.topic == request.question
 
 
-def test_reproducible_across_runs():
-    a = asyncio.run(DebateOrchestrator().run("600519 多空"))
-    b = asyncio.run(DebateOrchestrator().run("600519 多空"))
-    assert a.meta["n_flags"] == b.meta["n_flags"]
-    assert [c.text for c in a.claims] == [c.text for c in b.claims]
+def test_us_input_returns_structured_insufficient_evidence(monkeypatch):
+    async def must_not_prepare(self, request):
+        raise AssertionError("unsupported market must stop before data work")
+
+    monkeypatch.setattr(SkillRunner, "prepare", must_not_prepare)
+    result = asyncio.run(DebateOrchestrator().run("分析 NVDA"))
+
+    assert result.meta["symbol"] == "NVDA"
+    assert result.meta["data_status"] == "insufficient-evidence"
+    assert result.meta["supported_market"] is False
+    assert result.claims == []
+    assert result.verdicts == []
+    assert result.consensus == []
+    assert result.open_disagreements == []
+    assert result.disclaimer
+    assert "当前真实研究只支持 A 股代码。" in result.risk_boundaries
+    assert "当前结果没有使用模拟数据代替真实证据。" in result.risk_boundaries
 
 
-def test_disagreement_map_is_grounded_in_the_audit():
-    """The map reflects THIS debate: a bad-data symbol shows the data topic OPEN
-    with the concrete defect; a clean symbol shows it as consensus."""
-    dirty = asyncio.run(DebateOrchestrator().run("600519 多空"))
-    clean = asyncio.run(DebateOrchestrator().run("TSLA 多空"))
-    d_data = next(p for p in dirty.open_disagreements if p.topic == "证据本身干不干净")
-    c_data = next(p for p in clean.open_disagreements if p.topic == "证据本身干不干净")
-    assert dirty.meta["n_flags"] > 0 and d_data.status == "open"
-    assert clean.meta["n_flags"] == 0 and c_data.status == "consensus"
-    # liquidity view carries real numbers, not a template
-    liq = next(p for p in dirty.open_disagreements if "流动性" in p.topic)
-    assert "bps" in liq.bear_view and "天" in liq.bear_view
+def test_prepare_failure_does_not_expose_private_detail(monkeypatch):
+    async def broken(self, request):
+        raise RuntimeError("private service detail")
+
+    monkeypatch.setattr(SkillRunner, "prepare", broken)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空"))
+
+    assert result.meta["data_status"] == "error"
+    assert result.claims == []
+    assert "研究数据暂不可用，请稍后重试。" in result.risk_boundaries
+    assert "private service detail" not in repr(result.to_dict())
 
 
-def test_skills_manifest_traces_every_conclusion_to_a_skill_and_data():
-    """18 requires explainability: each conclusion links back to a skill + data."""
-    r = asyncio.run(DebateOrchestrator().run("600519 多空"))
-    man = r.meta["skills_manifest"]
-    assert man["data"]["symbol"] == "600519.SH" and man["data"]["n_bars"] > 0
-    # every arguing role's cited skills are listed and attributed
-    assert man["evidence_skills"] and all("used_by" in e for e in man["evidence_skills"])
-    assert "skill-factor-ranking-sage" in man["all_skills"]
-    # audit skills carry provenance so a judge can tell mock from real QuantSkills
-    for a in man["audit_skills"]:
-        assert a["provenance"] and a["verdict_for"]
+def test_prepare_timeout_returns_public_timeout_message(monkeypatch):
+    from backend import orchestration
+
+    async def too_slow(self, request):
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(SkillRunner, "prepare", too_slow)
+    monkeypatch.setattr(orchestration, "GLOBAL_BUDGET_SEC", 0.001)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空"))
+
+    assert result.meta["data_status"] == "error"
+    assert result.claims == []
+    assert "研究请求超过内部时间限制。" in result.risk_boundaries
 
 
-def test_plain_language_layer_for_beginners():
-    """15 命门: every claim and every audit flag carries a jargon-free takeaway."""
-    r = asyncio.run(DebateOrchestrator().run("600519 多空"))
-    assert all(c.plain for c in r.claims), "each claim needs a beginner one-liner"
-    for v in r.audit_flags():
-        assert v.plain, "each flag needs a beginner analogy"
-        # analogy must avoid the raw jargon term it explains
-        if v.status == "selection_bias":
-            assert "存活偏差" not in v.plain and "同学" in v.plain
-    # audit_claims surfaces it too
-    ac = asyncio.run(DebateOrchestrator().audit_claims("600519 审计"))
-    assert all("claim_plain" in a for a in ac["audits"])
+def test_non_success_bundle_returns_insufficient_evidence(
+    monkeypatch,
+    evidence_fixture,
+):
+    evidence = copy.deepcopy(evidence_fixture)
+    evidence.bundle.status = "insufficient-evidence"
+    evidence.results = {}
+
+    async def prepare(self, request):
+        return evidence
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空"))
+
+    assert result.meta["data_status"] == "insufficient-evidence"
+    assert result.claims == []
+    assert "当前没有足够的授权数据支持研究。" in result.risk_boundaries
 
 
-def test_output_always_carries_disclaimer_and_boundaries():
-    r = asyncio.run(DebateOrchestrator().run("AAPL bull bear"))
-    assert r.disclaimer
-    assert any("不构成" in b for b in r.risk_boundaries)
+def test_one_agent_failure_only_removes_that_agents_claims(
+    monkeypatch,
+    evidence_fixture,
+):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    async def broken(evidence):
+        raise RuntimeError("private agent detail")
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    orchestrator = DebateOrchestrator()
+    monkeypatch.setattr(orchestrator.bull, "argue", broken)
+    result = asyncio.run(orchestrator.run("600519 多空"))
+
+    assert {claim.side for claim in result.claims} == {"bear", "macro", "risk"}
+    assert result.meta["data_status"] == "success"
+    assert "private agent detail" not in repr(result.to_dict())
 
 
-def test_stance_is_machine_checkable_never_advises():
-    """15 可信度 & 18 失格红线: a caller can programmatically confirm no advice."""
-    r = asyncio.run(DebateOrchestrator().run("600519 多空")).to_dict()
-    assert r["meta"]["gives_investment_advice"] is False
-    assert r["meta"]["recommendation"] is None
-    ac = asyncio.run(DebateOrchestrator().audit_claims("600519 审计"))
-    assert ac["gives_investment_advice"] is False and ac["recommendation"] is None
+def test_debate_audits_each_shared_evidence_claim(monkeypatch, evidence_fixture):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空理由"))
+
+    assert {verdict.claim_id for verdict in result.verdicts} == {
+        claim.id for claim in result.claims
+    }
+    assert all(claim.plain for claim in result.claims)
+    assert all(verdict.plain for verdict in result.audit_flags())
 
 
-def test_budget_is_under_20_minutes():
-    assert GLOBAL_BUDGET_SEC <= 20 * 60
+def test_skills_manifest_lists_real_result_contract(monkeypatch, evidence_fixture):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空"))
+    manifest = result.meta["skills_manifest"]
+
+    assert manifest["data"] == {
+        "symbol": "600519.SH",
+        "status": "success",
+        "mode": "mock",
+        "dataset_hashes": ["daily-hash"],
+    }
+    assert manifest["all_skills"] == sorted(evidence_fixture.results)
+    assert [item["skill_id"] for item in manifest["results"]] == sorted(
+        evidence_fixture.results
+    )
+    factor = next(
+        item
+        for item in manifest["results"]
+        if item["skill_id"] == "skill-factor-ranking-sage"
+    )
+    assert factor["used_by"] == ["Bull", "Macro"]
+    assert factor["status"] == "success"
+    assert factor["mode"] == "mock"
+    assert factor["duration_ms"] == 1
+    assert factor["dataset_hashes"] == ["daily-hash"]
+    assert factor["assumptions"] == []
+    assert factor["warnings"] == []
+    assert result.meta["modes"] == ["mock"]
+    assert result.meta["audit_engine"] == ["mock"]
 
 
-def test_audit_claims_skill_matches_the_agent_card():
-    """The Agent Card advertises `audit_claims` — it must actually return per-claim
-    verdicts with reasoning, not silently run a full debate."""
-    r = asyncio.run(DebateOrchestrator().audit_claims("审计 600519 的多空论据"))
-    assert r["symbol"] == "600519.SH"
-    assert {a["claim_id"] for a in r["audits"]} == {"bull-1", "bear-1", "macro-1", "risk-1"}
-    valid = {"pass", "selection_bias", "suspected_overfit", "bad_data", "thin_data"}
-    assert all(a["status"] in valid for a in r["audits"])
-    assert all(a["provenance"] in ("mock", "mock-fallback", "real-cli") for a in r["audits"])
-    assert r["disclaimer"]
-    # compliance holds on this lighter path too
-    from backend import compliance
-    for a in r["audits"]:
-        assert not compliance.find_violations(a["reason"] + a["claim"])
+def test_output_always_carries_compliance_fields(monkeypatch, evidence_fixture):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空")).to_dict()
+
+    assert result["disclaimer"]
+    assert any("不构成" in boundary for boundary in result["risk_boundaries"])
+    assert result["meta"]["gives_investment_advice"] is False
+    assert result["meta"]["recommendation"] is None
+
+
+def test_audit_claims_prepares_once_and_uses_public_contract(
+    monkeypatch,
+    evidence_fixture,
+):
+    calls = {"n": 0}
+
+    async def prepare(self, request):
+        calls["n"] += 1
+        return evidence_fixture
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().audit_claims("审计 600519 的多空论据"))
+
+    assert calls["n"] == 1
+    assert result["symbol"] == "600519.SH"
+    assert result["data_status"] == "success"
+    assert {item["claim_id"] for item in result["audits"]} == {
+        "bull-1",
+        "bear-1",
+        "macro-1",
+        "risk-1",
+    }
+    assert result["gives_investment_advice"] is False
+    assert result["recommendation"] is None
+    assert result["disclaimer"]
+    for item in result["audits"]:
+        assert item["provenance"] in {"live", "cache", "precomputed", "mock"}
+        assert not compliance.find_violations(item["reason"] + item["claim"])
+
+
+def test_audit_claims_failure_is_safe(monkeypatch):
+    async def broken(self, request):
+        raise RuntimeError("private audit service detail")
+
+    monkeypatch.setattr(SkillRunner, "prepare", broken)
+    result = asyncio.run(DebateOrchestrator().audit_claims("审计 600519"))
+
+    assert result["symbol"] == "600519.SH"
+    assert result["data_status"] == "error"
+    assert result["audits"] == []
+    assert "private audit service detail" not in repr(result)
