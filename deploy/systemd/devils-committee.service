@@ -1,0 +1,26 @@
+[Unit]
+Description=Devil's Committee A2A Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=devils
+Group=devils
+WorkingDirectory=/opt/devils-committee
+EnvironmentFile=/etc/devils-committee/devils-committee.env
+Environment=CACHE_DIR=/var/lib/devils-committee/cache
+Environment=PRECOMPUTED_DIR=/var/lib/devils-committee/precomputed
+ExecStart=/opt/devils-committee/.venv-real/bin/uvicorn backend.a2a_server:app --host 127.0.0.1 --port 18080 --workers 1
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/devils-committee
+
+[Install]
+WantedBy=multi-user.target
