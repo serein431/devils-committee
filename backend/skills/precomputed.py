@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,29 @@ from .contracts import SkillFinding, SkillResult
 
 FACTOR_SKILL = "skill-factor-ranking-sage"
 HPO_SKILL = "skill-model-hpo-evidence-driven"
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_DATE_RE = re.compile(r"^\d{8}$")
+
+
+def _valid_date(value: object) -> str | None:
+    rendered = str(value)
+    if not _DATE_RE.fullmatch(rendered):
+        return None
+    try:
+        datetime.strptime(rendered, "%Y%m%d")
+    except ValueError:
+        return None
+    return rendered
+
+
+def _valid_generated_at(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def insufficient_result(skill_id: str, warning: str) -> SkillResult:
@@ -49,6 +74,15 @@ def parse_precomputed_findings(
             or not selected
             or not required <= set(metrics)
         ):
+            raise ValueError("factor evidence incomplete")
+        dates = [
+            _valid_date(metrics[key])
+            for key in ("train_start", "train_end", "valid_start", "valid_end")
+        ]
+        if any(value is None for value in dates):
+            raise ValueError("factor evidence incomplete")
+        train_start, train_end, valid_start, valid_end = dates
+        if not train_start <= train_end < valid_start <= valid_end:
             raise ValueError("factor evidence incomplete")
         return [
             SkillFinding(
@@ -172,6 +206,12 @@ class PrecomputedStore:
                 "precomputed report commit mismatch",
             )
 
+        if not _valid_generated_at(manifest.get("generated_at")):
+            return insufficient_result(
+                skill_id,
+                "precomputed evidence incomplete",
+            )
+
         universe = manifest.get("universe")
         if not isinstance(universe, list) or symbol not in universe:
             return insufficient_result(
@@ -215,10 +255,21 @@ class PrecomputedStore:
 
         raw_hashes = manifest.get("dataset_hashes")
         dataset_hashes = (
-            sorted({item for item in raw_hashes if isinstance(item, str)})
+            sorted(
+                {
+                    item.lower()
+                    for item in raw_hashes
+                    if isinstance(item, str) and _SHA256_RE.fullmatch(item)
+                }
+            )
             if isinstance(raw_hashes, list)
             else []
         )
+        if not dataset_hashes:
+            return insufficient_result(
+                skill_id,
+                "precomputed report dataset mismatch",
+            )
         raw_warnings = payload.get("warnings")
         warnings = (
             [item for item in raw_warnings if isinstance(item, str)]

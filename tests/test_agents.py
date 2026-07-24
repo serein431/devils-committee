@@ -1,4 +1,5 @@
 import asyncio
+import copy
 
 from backend.agents import AuditAgent, BearAgent, BullAgent, MacroAgent, RiskAgent
 from backend.llm import MockLLM
@@ -59,3 +60,38 @@ def test_audit_does_not_turn_missing_evidence_into_pass(
     )
 
     assert any(item.status == "thin_data" for item in verdicts)
+
+
+def test_audit_does_not_turn_skill_error_into_pass(evidence_fixture):
+    evidence = copy.deepcopy(evidence_fixture)
+    failed = evidence.results["skill-survivorship-universe-auditor"]
+    failed.status = "error"
+    failed.findings = []
+    failed.warnings = ["skill execution failed"]
+
+    claims = asyncio.run(RiskAgent(MockLLM()).argue(evidence))
+    verdicts = asyncio.run(AuditAgent(MockLLM()).audit(evidence, claims))
+
+    assert any(
+        item.status == "thin_data"
+        and item.audit_skill == "skill-survivorship-universe-auditor"
+        for item in verdicts
+    )
+
+
+def test_agents_send_sync_llm_calls_to_worker_threads(
+    monkeypatch,
+    evidence_fixture,
+):
+    calls = []
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+    claims = asyncio.run(BullAgent(MockLLM()).argue(evidence_fixture))
+    asyncio.run(AuditAgent(MockLLM()).audit(evidence_fixture, claims))
+
+    assert "argue" in calls
+    assert "audit_reason" in calls

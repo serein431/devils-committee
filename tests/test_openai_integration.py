@@ -13,8 +13,16 @@ from backend.config import CONFIG
 
 def _install_fake_openai(monkeypatch):
     """Force get_llm() -> OpenAICompatLLM, but bypass httpx with canned replies."""
-    monkeypatch.setattr(llm_mod, "CONFIG",
-                        dataclasses.replace(CONFIG, llm_mode="openai", llm_api_key="sk-test"))
+    monkeypatch.setattr(
+        llm_mod,
+        "CONFIG",
+        dataclasses.replace(
+            CONFIG,
+            llm_mode="openai",
+            llm_api_key="sk-test",
+            llm_model="ep-test",
+        ),
+    )
 
     calls = {"n": 0}
 

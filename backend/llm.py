@@ -3,8 +3,8 @@
 LLM_MODE=mock (default): deterministic, persona-flavored phrasing derived from the
 structured skill evidence. No key needed — the full debate reads naturally offline.
 
-LLM_MODE=openai: any OpenAI-compatible endpoint (DeepSeek from the Feishu group,
-or any base model — track 18 unlocked the base model on 7/23). Same interface.
+LLM_MODE=openai: an OpenAI-compatible endpoint configured with an explicit model
+identifier and API key. The same high-level interface is used in both modes.
 
 Agents talk to this via high-level methods (argue / audit_reason / chair_line) so
 neither mode leaks prompt-engineering into the agent code.
@@ -151,6 +151,10 @@ class OpenAICompatLLM:
 
 
 def get_llm():
-    if CONFIG.llm_mode == "openai" and CONFIG.llm_api_key:
+    if CONFIG.llm_mode == "mock":
+        return MockLLM()
+    if CONFIG.llm_mode == "openai":
+        if not CONFIG.llm_api_key.strip() or not CONFIG.llm_model.strip():
+            raise RuntimeError("live LLM configuration unavailable")
         return OpenAICompatLLM()
-    return MockLLM()
+    raise RuntimeError("unsupported LLM mode")

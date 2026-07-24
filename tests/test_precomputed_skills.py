@@ -50,6 +50,8 @@ def _write_run(
     universe: list[str] | None = None,
     source_files: dict[str, str] | None = None,
     result_file: str = "result.json",
+    dataset_hashes: list[object] | None = None,
+    generated_at: str = "2026-07-24T00:00:00+00:00",
 ) -> Path:
     inputs = root / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
@@ -66,9 +68,13 @@ def _write_run(
     run = root / skill_id
     run.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "generated_at": "2026-07-24T00:00:00+00:00",
+        "generated_at": generated_at,
         "git_commit": git_commit,
-        "dataset_hashes": ["factor-hash", "daily-hash", "factor-hash"],
+        "dataset_hashes": (
+            dataset_hashes
+            if dataset_hashes is not None
+            else ["b" * 64, "a" * 64, "b" * 64]
+        ),
         "universe": universe or ["600519.SH", "300750.SZ", "601318.SH"],
         "source_files": source_files,
         "result_file": result_file,
@@ -95,7 +101,7 @@ def test_matching_factor_report_loads_as_precomputed(tmp_path):
 
     assert result.status == "success"
     assert result.mode == "precomputed"
-    assert result.dataset_hashes == ["daily-hash", "factor-hash"]
+    assert result.dataset_hashes == ["a" * 64, "b" * 64]
     assert result.metrics == _factor_payload()["metrics"]
     assert result.findings[0].claim == "selected factors: momentum_20d, turnover"
     assert result.warnings == ["research only"]
@@ -138,6 +144,48 @@ def test_commit_mismatch_is_insufficient(tmp_path):
 
     assert result.status == "insufficient-evidence"
     assert result.warnings == ["precomputed report commit mismatch"]
+
+
+@pytest.mark.parametrize("dataset_hashes", [[], ["not-a-sha256"], [None]])
+def test_missing_or_invalid_dataset_hashes_are_insufficient(
+    tmp_path,
+    dataset_hashes,
+):
+    _write_run(tmp_path, dataset_hashes=dataset_hashes)
+
+    result = PrecomputedStore(tmp_path, "abc123").load(
+        FACTOR_SKILL,
+        "600519.SH",
+    )
+
+    assert result.status == "insufficient-evidence"
+    assert result.warnings == ["precomputed report dataset mismatch"]
+
+
+def test_invalid_generated_at_is_insufficient(tmp_path):
+    _write_run(tmp_path, generated_at="not-a-date")
+
+    result = PrecomputedStore(tmp_path, "abc123").load(
+        FACTOR_SKILL,
+        "600519.SH",
+    )
+
+    assert result.status == "insufficient-evidence"
+    assert result.warnings == ["precomputed evidence incomplete"]
+
+
+def test_invalid_factor_date_range_is_insufficient(tmp_path):
+    payload = _factor_payload()
+    payload["metrics"]["valid_start"] = "20240101"
+    _write_run(tmp_path, payload=payload)
+
+    result = PrecomputedStore(tmp_path, "abc123").load(
+        FACTOR_SKILL,
+        "600519.SH",
+    )
+
+    assert result.status == "insufficient-evidence"
+    assert result.warnings == ["precomputed evidence incomplete"]
 
 
 def test_symbol_absent_is_insufficient(tmp_path):

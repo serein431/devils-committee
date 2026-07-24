@@ -87,7 +87,16 @@ def test_config_summary_uses_safe_model_label_for_mock_and_openai():
 
 def test_openai_mode_requires_an_explicit_model_id():
     assert config.Config(llm_mode="openai", llm_model="").real_llm_ready is False
-    assert config.Config(llm_mode="openai", llm_model="ep-test").real_llm_ready is True
+    assert config.Config(
+        llm_mode="openai",
+        llm_model="ep-test",
+        llm_api_key="",
+    ).real_llm_ready is False
+    assert config.Config(
+        llm_mode="openai",
+        llm_model="ep-test",
+        llm_api_key="sk-test",
+    ).real_llm_ready is True
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from .models import (
     AuditVerdict,
     Claim,
@@ -57,7 +59,8 @@ class _Base:
             return []
 
         insufficient = any(item.status != "success" for item in chosen)
-        text = self.llm.argue(
+        text = await asyncio.to_thread(
+            self.llm.argue,
             side=self.side,
             symbol=evidence.request.symbol,
             evidence=[item.to_dict() for item in items],
@@ -116,7 +119,7 @@ class AuditAgent(_Base):
                 (
                     item
                     for item in relevant
-                    if item.status == "insufficient-evidence"
+                    if item.status != "success"
                 ),
                 None,
             )
@@ -133,15 +136,17 @@ class AuditAgent(_Base):
                 status, source, severity = "pass", None, "none"
 
             detail = source.to_dict() if source else {}
+            reason = await asyncio.to_thread(
+                self.llm.audit_reason,
+                status=status,
+                symbol=evidence.request.symbol,
+                detail=detail,
+            )
             verdicts.append(
                 AuditVerdict(
                     claim_id=claim.id,
                     status=status,
-                    reason=self.llm.audit_reason(
-                        status=status,
-                        symbol=evidence.request.symbol,
-                        detail=detail,
-                    ),
+                    reason=reason,
                     audit_skill=source.skill_id if source else "",
                     severity=severity,
                     remediation=(

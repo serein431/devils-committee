@@ -104,7 +104,11 @@ class Config:
 
     @property
     def real_llm_ready(self) -> bool:
-        return self.llm_mode != "openai" or bool(self.llm_model.strip())
+        return (
+            self.llm_mode == "openai"
+            and bool(self.llm_model.strip())
+            and bool(self.llm_api_key.strip())
+        )
 
     def summary(self) -> dict[str, str | int]:
         """Return non-sensitive state suitable for status endpoints."""

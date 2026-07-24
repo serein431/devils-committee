@@ -5,6 +5,7 @@ temperature, persona system prompt, and the evidence JSON — is assembled right
 and that get_llm() switches modes correctly. When the Feishu key lands, these
 lock down that only the transport changes, not the contract."""
 import dataclasses
+import pytest
 from backend import llm
 
 
@@ -81,13 +82,28 @@ def test_get_llm_switches_on_mode_and_key(monkeypatch):
     # mock mode -> MockLLM regardless of key
     monkeypatch.setattr(llm, "CONFIG", dataclasses.replace(base, llm_mode="mock"))
     assert isinstance(llm.get_llm(), llm.MockLLM)
-    # openai mode but NO key -> still MockLLM (fail-safe, never crash offline demo)
+    # Live mode must never silently publish mock wording.
     monkeypatch.setattr(llm, "CONFIG",
                         dataclasses.replace(base, llm_mode="openai", llm_api_key=""))
-    assert isinstance(llm.get_llm(), llm.MockLLM)
+    with pytest.raises(RuntimeError, match="configuration unavailable"):
+        llm.get_llm()
+    monkeypatch.setattr(
+        llm,
+        "CONFIG",
+        dataclasses.replace(
+            base,
+            llm_mode="openai",
+            llm_api_key="sk-test",
+            llm_model="",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="configuration unavailable"):
+        llm.get_llm()
     # openai mode WITH key -> real client (constructed offline, no network call)
     monkeypatch.setattr(llm, "CONFIG",
-                        dataclasses.replace(base, llm_mode="openai", llm_api_key="sk-test"))
+                        dataclasses.replace(base, llm_mode="openai",
+                                            llm_api_key="sk-test",
+                                            llm_model="ep-test"))
     assert isinstance(llm.get_llm(), llm.OpenAICompatLLM)
 
 
