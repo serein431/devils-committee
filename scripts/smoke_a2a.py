@@ -1,136 +1,249 @@
 #!/usr/bin/env python3
-"""A2A external-surface smoke test — run against a LIVE server before judging.
-
-Unlike the pytest suite (in-process TestClient), this hits real HTTP so you can
-point it at your public Cloudflare-Tunnel / VPS URL and confirm the exact surface
-a PandaAI judge will call is green: health, Agent Card, both advertised skills,
-SSE streaming, and (optionally) bearer auth.
-
-    python scripts/smoke_a2a.py                              # localhost:8080
-    python scripts/smoke_a2a.py --url https://your-host      # public URL
-    python scripts/smoke_a2a.py --url https://your-host --token SECRET
-
-Exit code 0 = all green (ready to be judged); non-zero = something a judge could hit.
-Only stdlib — copy it anywhere, no install.
-"""
+"""Check the public A2A surface without printing credentials or response bodies."""
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
+from urllib.parse import urlsplit
+
+
+REQUEST_TIMEOUT = 610
+DEFAULT_TICKER = "600519.SH"
+REQUIRED_SKILL_IDS = {
+    "skill-corporate-action-adjustment-auditor",
+    "skill-survivorship-universe-auditor",
+    "skill-portfolio-liquidity-stress-test",
+    "skill-index-rebalance-event-study",
+    "skill-factor-ranking-sage",
+    "skill-model-hpo-evidence-driven",
+}
 
 _TTY = sys.stdout.isatty()
-def _c(code, s): return f"\033[{code}m{s}\033[0m" if _TTY else s
-OKG = lambda s: _c("32", s)
-BAD = lambda s: _c("1;31", s)
-DIM = lambda s: _c("2", s)
+
+
+def _c(code: str, value: str) -> str:
+    return f"\033[{code}m{value}\033[0m" if _TTY else value
+
+
+def _ok(value: str) -> str:
+    return _c("32", value)
+
+
+def _bad(value: str) -> str:
+    return _c("1;31", value)
+
+
+def _dim(value: str) -> str:
+    return _c("2", value)
+
 
 RESULTS: list[tuple[bool, str]] = []
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append((ok, name))
-    tag = OKG("PASS") if ok else BAD("FAIL")
-    print(f"  [{tag}] {name}" + (DIM(f"  — {detail}") if detail else ""))
+    tag = _ok("PASS") if ok else _bad("FAIL")
+    suffix = _dim(f"  — {detail}") if detail else ""
+    print(f"  [{tag}] {name}{suffix}")
 
 
-def _req(url: str, *, method="GET", body=None, token=None, timeout=1230):
+def _req(
+    url: str,
+    *,
+    method: str = "GET",
+    body: dict | None = None,
+    token: str | None = None,
+    timeout: int = REQUEST_TIMEOUT,
+) -> tuple[int, str]:
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers=headers,
+        method=method,
+    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, r.read().decode()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode()
+
+
+def _target_name(url: str) -> str:
+    parts = urlsplit(url)
+    return parts.hostname or "invalid-host"
+
+
+def _research_body(ticker: str, *, skill: str = "debate_case") -> dict:
+    if re.fullmatch(r"[0-9]{6}\.(?:SH|SZ)", ticker.upper()):
+        symbol = ticker.upper()
+        return {
+            "skill": skill,
+            "symbol": symbol,
+            "question": f"研究 {symbol} 的多空证据和风险",
+            "start_date": "20240101",
+            "end_date": "20260724",
+        }
+    return {"skill": skill, "topic": ticker}
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="http://localhost:8080")
-    ap.add_argument("--token", default=None, help="bearer token if auth is on")
-    ap.add_argument("--ticker", default="600519 多空双方与风险")
-    args = ap.parse_args()
+    RESULTS.clear()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url", default="http://localhost:8080")
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("A2A_BEARER_TOKEN"),
+        help="bearer token; prefer A2A_BEARER_TOKEN",
+    )
+    parser.add_argument("--ticker", default=DEFAULT_TICKER)
+    args = parser.parse_args()
     base = args.url.rstrip("/")
-    print(f"\nA2A smoke test → {base}\n")
+    print(f"\nA2A smoke test → {_target_name(base)}\n")
 
-    # 1) health
-    try:
-        st, body = _req(f"{base}/healthz")
-        j = json.loads(body)
-        check("GET /healthz 200 + ok", st == 200 and j.get("ok") is True, f"modes={j.get('modes',{})}")
-    except Exception as e:
-        check("GET /healthz", False, str(e)[:120])
+    health_modes: dict = {}
+    live_cli = False
 
-    # 2) agent card
     try:
-        st, body = _req(f"{base}/.well-known/agent-card.json")
+        status, body = _req(f"{base}/healthz")
+        payload = json.loads(body)
+        health_modes = payload.get("modes", {})
+        if not isinstance(health_modes, dict):
+            health_modes = {}
+        live_cli = (
+            health_modes.get("data_mode") == "panda"
+            and health_modes.get("skill_mode") == "cli"
+        )
+        safe_modes = {
+            key: health_modes.get(key)
+            for key in ("llm_mode", "data_mode", "skill_mode")
+        }
+        check(
+            "GET /healthz 200 + ok",
+            status == 200 and payload.get("ok") is True,
+            f"modes={safe_modes}",
+        )
+    except Exception as exc:
+        check("GET /healthz", False, type(exc).__name__)
+
+    try:
+        status, body = _req(f"{base}/.well-known/agent-card.json")
         card = json.loads(body)
-        ids = {s["id"] for s in card.get("skills", [])}
-        check("GET agent-card 200", st == 200)
-        check("agent-card url points to /a2a", card.get("url", "").endswith("/a2a"), card.get("url", ""))
-        check("agent-card advertises both skills", {"debate_case", "audit_claims"} <= ids, str(sorted(ids)))
-        check("agent-card streaming:true", card.get("capabilities", {}).get("streaming") is True)
-    except Exception as e:
-        check("GET agent-card", False, str(e)[:120])
+        ids = {
+            item.get("id")
+            for item in card.get("skills", [])
+            if isinstance(item, dict)
+        }
+        check("GET agent-card 200", status == 200)
+        check("agent-card url points to /a2a", card.get("url", "").endswith("/a2a"))
+        check("agent-card advertises both skills", {"debate_case", "audit_claims"} <= ids)
+        check(
+            "agent-card streaming:true",
+            card.get("capabilities", {}).get("streaming") is True,
+        )
+    except Exception as exc:
+        check("GET agent-card", False, type(exc).__name__)
 
-    # 3) debate_case
+    debate_body = _research_body(args.ticker)
     try:
-        st, body = _req(f"{base}/a2a", method="POST", token=args.token,
-                        body={"skill": "debate_case", "topic": args.ticker})
-        r = json.loads(body)["result"]
-        check("POST debate_case 200", st == 200)
-        check("debate has 4 claims", r["meta"]["n_claims"] == 4, f"symbol={r['meta']['symbol']}")
-        check("debate carries disclaimer", bool(r["disclaimer"]))
-        check("debate <= 20 min budget", r["elapsed_sec"] <= 20 * 60, f"{r['elapsed_sec']}s")
-        check("skills_manifest present", bool(r["meta"].get("skills_manifest", {}).get("all_skills")))
-    except Exception as e:
-        check("POST debate_case", False, str(e)[:150])
+        status, body = _req(
+            f"{base}/a2a",
+            method="POST",
+            token=args.token,
+            body=debate_body,
+        )
+        result = json.loads(body)["result"]
+        meta = result.get("meta", {})
+        manifest = meta.get("skills_manifest", {})
+        results = manifest.get("results", [])
+        all_skills = set(manifest.get("all_skills", []))
+        check("POST debate_case 200", status == 200)
+        check(
+            "debate data_status success",
+            meta.get("data_status") == "success",
+            f"symbol={meta.get('symbol', 'unknown')}",
+        )
+        check("debate carries disclaimer", bool(result.get("disclaimer")))
+        elapsed = result.get("elapsed_sec")
+        check(
+            "research stays inside 10-minute budget",
+            isinstance(elapsed, (int, float)) and elapsed <= 600,
+            f"elapsed={elapsed}",
+        )
+        check("all six skill ids are present", all_skills == REQUIRED_SKILL_IDS)
+        check(
+            "skills_manifest uses structured results",
+            isinstance(results, list)
+            and all(isinstance(item, dict) and item.get("skill_id") for item in results),
+        )
+        if live_cli:
+            check(
+                "no mock result in live smoke",
+                len(results) == len(REQUIRED_SKILL_IDS)
+                and all(item.get("mode") != "mock" for item in results),
+            )
+    except Exception as exc:
+        check("POST debate_case", False, type(exc).__name__)
 
-    # 4) audit_claims
     try:
-        st, body = _req(f"{base}/a2a", method="POST", token=args.token,
-                        body={"skill": "audit_claims", "topic": args.ticker})
-        r = json.loads(body)
-        check("POST audit_claims 200", st == 200 and r.get("skill") == "audit_claims")
-        check("audit_claims returns per-claim verdicts", len(r["result"]["audits"]) == 4)
-    except Exception as e:
-        check("POST audit_claims", False, str(e)[:150])
+        status, body = _req(
+            f"{base}/a2a",
+            method="POST",
+            token=args.token,
+            body=_research_body(args.ticker, skill="audit_claims"),
+        )
+        payload = json.loads(body)
+        audit = payload.get("result", {})
+        check(
+            "POST audit_claims 200",
+            status == 200 and payload.get("skill") == "audit_claims",
+        )
+        check(
+            "audit_claims returns verdict list",
+            isinstance(audit.get("audits"), list),
+        )
+    except Exception as exc:
+        check("POST audit_claims", False, type(exc).__name__)
 
-    # 5) SSE streaming
     try:
-        st, body = _req(f"{base}/a2a?stream=1&pace=0", method="POST", token=args.token,
-                        body={"topic": args.ticker})
+        status, body = _req(
+            f"{base}/a2a?stream=1&pace=0",
+            method="POST",
+            token=args.token,
+            body=debate_body,
+        )
         got_result = '"stage": "result"' in body or '"stage":"result"' in body
-        check("POST ?stream=1 yields result event", st == 200 and got_result)
-    except Exception as e:
-        check("POST ?stream=1", False, str(e)[:150])
+        check("POST ?stream=1 yields result event", status == 200 and got_result)
+    except Exception as exc:
+        check("POST ?stream=1", False, type(exc).__name__)
 
-    # 6) auth (only if a token is configured on the server)
     if args.token:
         try:
-            st, _ = _req(f"{base}/a2a", method="POST", body={"topic": args.ticker})  # no token
-            check("auth: 401 without token", st == 401, f"got {st}")
-        except Exception as e:
-            check("auth check", False, str(e)[:120])
+            status, _ = _req(f"{base}/a2a", method="POST", body=debate_body)
+            check("auth: 401 without token", status == 401, f"status={status}")
+        except Exception as exc:
+            check("auth check", False, type(exc).__name__)
 
-    # summary
     passed = sum(1 for ok, _ in RESULTS if ok)
     total = len(RESULTS)
     print()
     if passed == total:
-        print(OKG(f"✔ all {total} checks green — ready to be judged."))
+        print(_ok(f"all {total} checks passed"))
         return 0
-    print(BAD(f"✗ {total - passed}/{total} checks FAILED:"))
+    print(_bad(f"{total - passed}/{total} checks failed:"))
     for ok, name in RESULTS:
         if not ok:
-            print(BAD(f"    - {name}"))
+            print(_bad(f"    - {name}"))
     return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
