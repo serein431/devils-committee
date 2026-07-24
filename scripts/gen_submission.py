@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the track-18 submission doc (docs/SUBMISSION_18.md) from live output.
+"""Generate the PandaAI submission draft from the current runtime output.
 
-Assembles the official PandaAI submission checklist into one judge-facing Markdown,
-auto-embedding a REAL example output + the actual QuantSkills manifest so '结果展示'
-and '用到的 Skills 列表' are grounded, not hand-waved. Regenerate anytime:
-
-    .venv/bin/python scripts/gen_submission.py
+The default environment is offline mock. A generated sample therefore keeps its
+actual mode labels and must not be described as live evidence.
 """
 from __future__ import annotations
 
@@ -16,116 +13,153 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from backend.orchestration import DebateOrchestrator  # noqa: E402
+
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "SUBMISSION_18.md")
 
+SKILL_IDS = [
+    "corporate-action-adjustment-auditor",
+    "survivorship-universe-auditor",
+    "portfolio-liquidity-stress-test",
+    "index-rebalance-event-study",
+    "factor-ranking-sage",
+    "model-hpo-evidence-driven",
+]
+ONLINE_SKILLS = SKILL_IDS[:4]
+PRECOMPUTED_SKILLS = SKILL_IDS[4:]
+EXAMPLE_SYMBOLS = ["600519.SH", "300750.SZ", "601318.SH"]
+
+
+def _display_skill_id(value: str) -> str:
+    """Remove the local repository prefix from a runtime Skill ID."""
+
+    return value.removeprefix("skill-")
+
 
 def _examples() -> list[dict]:
-    out = []
-    for p in sorted(glob.glob(os.path.join(ROOT, "tests", "examples", "*.json"))):
-        out.append(json.load(open(p, encoding="utf-8")))
-    return out
+    examples: dict[str, dict] = {}
+    for path in sorted(glob.glob(os.path.join(ROOT, "tests", "examples", "*.json"))):
+        with open(path, encoding="utf-8") as handle:
+            item = json.load(handle)
+        examples[item["expected"]["symbol"]] = item
+    if set(examples) != set(EXAMPLE_SYMBOLS):
+        raise RuntimeError(f"unexpected examples: {sorted(examples)}")
+    return [examples[symbol] for symbol in EXAMPLE_SYMBOLS]
+
+
+def _checked_skill_ids(manifest: dict) -> list[str]:
+    observed = [_display_skill_id(item) for item in manifest.get("all_skills", [])]
+    if set(observed) != set(SKILL_IDS):
+        raise RuntimeError(f"unexpected Skill IDs: {observed}")
+    return SKILL_IDS
 
 
 def main() -> None:
-    demo = asyncio.run(DebateOrchestrator().run("帮我理解 600519 现在多空双方的理由和风险"))
-    d = demo.to_dict()
-    man = d["meta"]["skills_manifest"]
-    exs = _examples()
+    result = asyncio.run(
+        DebateOrchestrator().run("研究 600519.SH 的复权、分红、因子和流动性风险")
+    )
+    payload = result.to_dict()
+    meta = payload["meta"]
+    manifest = meta["skills_manifest"]
+    skill_ids = _checked_skill_ids(manifest)
+    examples = _examples()
 
     lines: list[str] = []
-    P = lines.append
-    P("# PandaAI（赛道 18）提交说明文档 · Devil's Committee")
-    P("")
-    P("> 本文件由 `scripts/gen_submission.py` 从真实运行输出生成；示例与 Skills 清单均为实跑结果。")
-    P("> `TODO` 处为需人工填写的对外信息（公网地址 / GitHub / 视频 / 团队联系方式）。")
-    P("")
-
-    P("## 1. Agent 名称、简介、团队")
-    P("- **名称**：反方 · The Devil's Committee — AI 投资辩论庭")
-    P("- **简介**：多智能体对抗辩论 + 独立审计的理财认知教练。Bull/Bear/Macro/Risk 四个 Agent "
-      "并行取证，Audit Agent 独立复核每条论据（抓选择偏差/坏数据/过拟合）并可打回，Chair 收敛为"
-      "「分歧地图 + 审计印章 + 风险边界」。**不给买卖建议，教用户自己判断**。仅供研究/教育。")
-    P("- **团队**：Team ADVX2026（两名 14 岁自学者 + 两名大学生）。TODO：成员与联系方式。")
-    P("")
-
-    P("## 2. Agent Card URL（A2A，公网可访问）")
-    P("- `GET https://TODO-your-host/.well-known/agent-card.json`（服务运行时自动注入公网 `url`）")
-    P("- 本地示例：`GET http://localhost:8080/.well-known/agent-card.json`")
-    P("- 声明能力：`streaming: true`；广告技能：`debate_case`、`audit_claims`（两者均已实现）。")
-    P("")
-
-    P("## 3. 服务地址 + 鉴权")
-    P("- 服务：`POST https://TODO-your-host/a2a`（JSON；`?stream=1` 走 SSE）")
-    P("- 健康检查：`GET /healthz`（评审期须常在线；见 `docs/service_checklist.md`）")
-    P("- 鉴权：Bearer Token（设 `A2A_BEARER_TOKEN` 后必填）：`Authorization: Bearer <token>`")
-    P("- 总响应 ≤ 20 分钟（全局预算 18 分钟 + 每 Agent 超时；SSE 先吐进度）。")
-    P("")
-
-    P("## 4. 使用场景 / 架构 / Skills 调用方式 / 结果展示")
-    P("**使用场景**：理财小白面对一个标的，网上信息一边倒只有结论。本 Agent 把正反方、风险、"
-      "和「哪条论据被审计打回」摊开，教用户当裁判。")
-    P("")
-    P("**架构（真协作，非串联）**：并行取证 → 独立审计（可打回）→ 收敛 → 合规过滤。详见 `README.md` 与 `docs/ARCHITECTURE.md`。")
-    P("")
-    P("**Skills 调用方式**：每个角色调用对应 QuantSkills；`SKILL_MODE=cli` 时审计走真实 skill CLI，"
-      "每条 verdict 带 `provenance`（mock / real-cli）可追溯。")
-    P("")
-    P("**结果展示（真实运行摘录，标的 600519.SH）**：")
-    P("")
-    P("```json")
+    add = lines.append
+    add("# PandaAI（参评类别 18）提交说明 · Devil's Committee")
+    add("")
+    add("> 本文件由 `scripts/gen_submission.py` 根据当前运行结果生成。默认环境使用 mock，")
+    add("> 所以下面的示例只证明离线流程和返回结构可运行，不代表真实凭证、真实数据或公网部署已经完成。")
+    add("")
+    add("## 1. Agent 名称、简介与团队")
+    add("- **名称**：反方 · The Devil's Committee — AI 投资辩论庭")
+    add("- **简介**：Bull、Bear、Macro、Risk 四个 Agent 使用同一批研究证据分别陈述，Audit Agent 独立检查论据，Chair 汇总共识、分歧和风险范围。")
+    add("- **限制**：不给买卖指令、目标价、收益承诺，也不执行自动交易。仅供学习与研究。")
+    add("- **团队成员与联系方式**：`需人工填写`。")
+    add("")
+    add("## 2. A2A、Agent Card、SSE 与鉴权")
+    add("- Agent Card：`GET /.well-known/agent-card.json`。公网地址：`需人工填写`。")
+    add("- 调用入口：`POST /a2a`；请求头或查询参数可选择 SSE 流式返回。")
+    add("- 鉴权：设置 `A2A_BEARER_TOKEN` 后使用 `Authorization: Bearer <token>`。")
+    add("- 服务总请求限制为 600 秒；每个在线 Skill 和单个 Agent 的限制为 120 秒。")
+    add("- 当前仓库能证明本地接口存在，不能证明评审期公网服务已经部署。")
+    add("")
+    add("## 3. 模型、数据与市场范围")
+    add("- LLM 通过 Volcengine Ark 调用，对外显示名称是 **DeepSeek V4 Pro**；`LLM_MODEL` 填活动提供的 Endpoint ID。")
+    add("- 真实数据由 PandaData 提供，QuantSkills 读取研究所需的历史数据。")
+    add("- 当前真实研究只支持 A 股。港股或其他境外市场请求返回 `insufficient-evidence`，不会改用 mock。")
+    add("- 真实请求每次运行四个在线 QuantSkills，另外两个读取与当前构建和数据哈希相符的预计算报告。")
+    add("")
+    add("## 4. 六个 Skill ID")
+    add("**每次在线运行的四个：**")
+    for skill_id in ONLINE_SKILLS:
+        add(f"- `{skill_id}`")
+    add("")
+    add("**读取预计算结果的两个：**")
+    for skill_id in PRECOMPUTED_SKILLS:
+        add(f"- `{skill_id}`")
+    add("")
+    add("> 本地克隆目录和当前运行时 JSON 会在这些 ID 前加 `skill-`；提交材料使用上面的六个 ID。")
+    add("")
+    add("## 5. 来源和状态怎么读")
+    add("- `live`：本次从 PandaData 新取数据，并保存带 SHA-256 的内容哈希缓存。")
+    add("- `cache`：读取此前保存且哈希校验通过的数据。")
+    add("- `precomputed`：读取提交号、数据哈希和清单均可核验的因子或 HPO 报告。")
+    add("- `mock`：离线开发用的固定模拟结果，不能当作公开研究证据。")
+    add("- `insufficient-evidence`：缺少所需数据或报告，不能说成通过。真实来源失败时不会转成 mock。")
+    add("")
+    add("## 6. 当前生成示例")
     sample = {
-        "symbol": d["meta"]["symbol"],
-        "n_claims": d["meta"]["n_claims"],
-        "audit_flags": [{"claim_id": v["claim_id"], "status": v["status"],
-                         "severity": v["severity"], "provenance": v["provenance"]}
-                        for v in d["audit_flags"]],
-        "open_disagreements": [{"topic": p["topic"], "status": p["status"]}
-                               for p in d["open_disagreements"]],
-        "audit_engine": d["meta"]["audit_engine"],
-        "disclaimer": d["disclaimer"],
+        "symbol": meta["symbol"],
+        "data_status": meta["data_status"],
+        "modes": meta.get("modes", []),
+        "n_claims": meta["n_claims"],
+        "n_flags": meta["n_flags"],
+        "skill_ids": skill_ids,
+        "audit_flags": [
+            {
+                "claim_id": item["claim_id"],
+                "status": item["status"],
+                "provenance": item["provenance"],
+            }
+            for item in payload["audit_flags"]
+        ],
+        "gives_investment_advice": meta["gives_investment_advice"],
     }
-    P(json.dumps(sample, ensure_ascii=False, indent=2))
-    P("```")
-    P("")
+    add("```json")
+    add(json.dumps(sample, ensure_ascii=False, indent=2))
+    add("```")
+    add("")
+    add("## 7. 三个固定示例")
+    for example in examples:
+        add(f"- `{example['expected']['symbol']}`：{example['input']['topic']}")
+    add("")
+    add("固定示例必须是 `600519.SH`、`300750.SZ`、`601318.SH`。真实结论取决于当次数据和可用证据，不预写审计结果。")
+    add("")
+    add("## 8. 真实环境准备")
+    add("```bash")
+    add("python3.12 -m venv .venv-real")
+    add(".venv-real/bin/pip install -r requirements-real.txt")
+    add("./scripts/fetch_quantskills.sh")
+    add(".venv-real/bin/python scripts/setup_real.py --check")
+    add("```")
+    add("有效凭证只能放在本机 `.env` 或部署平台的私密配置中。")
+    add("")
+    add("## 9. 仍需人工完成")
+    add("- 团队姓名与联系方式：`需人工填写`。")
+    add("- 公网服务地址与真实鉴权说明：`待完成`。")
+    add("- 代码仓库提交地址及评审访问权限：`需人工填写并确认`。")
+    add("- 演示视频及链接：`待完成`。")
+    add("- 真实凭证环境下三个 A 股示例的脱敏记录：`待完成`。")
+    add("")
+    add("## 10. 风险提示")
+    add(f"> {payload['disclaimer']}")
 
-    P("## 5. 示例问题与预期输出（≥3）")
-    for ex in exs:
-        e = ex["expected"]
-        flags = "、".join(f"{f['claim_id']}:{f['status']}" for f in e["audit_flags"]) or "全部通过"
-        P(f"- **输入**：`{ex['input']['topic']}`")
-        P(f"  - 预期：标的 `{e['symbol']}`，{e['n_claims']} 条论点，审计 {flags}；带风险提示。")
-    P("")
-    P("> 完整输入/预期输出见 `tests/examples/*.json`；`pytest` 回归保证不漂移。")
-    P("")
-
-    P("## 6. 用到的数据 / 投研 Skills 列表（本场实跑）")
-    P(f"- **数据**：panda_data（历史，仅研究）；本场窗口 `{man['data']['window']}`"
-      f"（{man['data']['source']}，{man['data']['n_bars']} 根）。")
-    P("- **取证 Skills**：")
-    for e in man["evidence_skills"]:
-        P(f"  - `{e['skill']}` ← {'、'.join(e['used_by'])}")
-    P("- **审计 Skills**：")
-    for a in man["audit_skills"]:
-        P(f"  - `{a['skill']}` → 复核 {'、'.join(a['verdict_for'])}（provenance: {'/'.join(a['provenance'])}）")
-    P(f"- **全部**：{'、'.join('`'+s+'`' for s in man['all_skills'])}")
-    P("")
-
-    P("## 7. GitHub / 联系方式 / 演示视频")
-    P("- GitHub：`https://TODO-your-repo`（或邮件 `code@pandaai.online`）")
-    P("- 演示视频（完整核心流程，现场真机非概念视频）：`https://TODO-video`；脚本见 `docs/demo_script.md`")
-    P("")
-
-    P("## 8. 风险提示（合规）")
-    P(f"> {d['disclaimer']}")
-    P("")
-    P("- 全部对外输出经 `backend/compliance.py`：禁买卖/收益承诺/目标价/荐股，强制风险提示，审计标记保持可见。")
-    P("- 数据仅用于比赛/研究，不构成投资建议；`SKILL_MODE=cli` 的 mock 数据明确标 `mock-synthetic`，不冒充真实数据。")
-
-    with open(OUT, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines) + "\n")
+    with open(OUT, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
     print(f"wrote {OUT} ({len(lines)} lines)")
 
 

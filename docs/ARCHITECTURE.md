@@ -1,59 +1,78 @@
 # 系统架构 · AI 投资辩论庭
 
-> 目标：后端满足 18 PandaAI（A2A Remote Agent、真协作、审计新形态），前端满足 15 度小满（理财教练、不给答案、合规边界）。同一引擎，两张脸。
+同一后端提供教练页面和 A2A 调用。默认开发使用 mock；真实环境使用 Volcengine Ark、PandaData、四个在线 QuantSkills 和两个预计算报告。
 
-## 数据流
+## 请求路径
 
+```text
+调用方
+  ├─ GET /.well-known/agent-card.json
+  ├─ GET /healthz
+  └─ POST /a2a ── Bearer 鉴权可选 ── JSON 或 SSE
+         │
+         ▼
+  ResearchRequest：解析 A 股代码和研究参数
+         │  不支持的市场 → insufficient-evidence
+         ▼
+  PandaData 数据包
+         ├─ live：本次新取数据
+         └─ cache：内容哈希核验通过的本地数据
+         │
+         ├─ 四个在线 QuantSkills（每个最多 120 秒）
+         └─ 两个 precomputed 报告
+         │
+         ▼
+  Bull / Bear / Macro / Risk 并行陈述（单个 Agent 最多 120 秒）
+         ▼
+  Audit Agent 独立检查每条论据
+         ▼
+  Chair 汇总共识、分歧和风险范围
+         ▼
+  compliance.py 移除操作性表述并附风险提示
+         ▼
+  A2A JSON / SSE / 教练页面
 ```
-用户/评委提问（自然语言，一个标的或一笔配置）
-        │
-        ▼
-┌─────────────────────────────────────────────┐
-│  A2A Server  (/.well-known/agent-card.json)   │  ← 18 联调入口；FastAPI + SSE streaming
-│  skills: debate_case, audit_claims            │
-└───────────────┬───────────────────────────────┘
-                │  DebateOrchestrator.run(topic)
-   ┌────────────┼───────────────────────────────┐
-   ▼            ▼            ▼           ▼
- Bull        Bear         Macro       Risk        ← 并行取证（asyncio.gather）
-   │            │            │           │           每个 Agent 调 QuantSkills / panda_data
-   └────────────┴─────┬──────┴───────────┘
-                      ▼
-              Audit Agent（独立复核）              ← survivorship-bias/data-quality/hpo-evidence 审计
-              对每条论据打： pass / overfit? / thin_data
-                      ▼
-              Chair Agent（收敛）                  ← 研报生成 skill
-              → 共识 / 未解分歧 / 风险提示
-                      ▼
-        ┌─────────────┴─────────────┐
-        ▼                           ▼
-  A2A 结构化响应(18)          教练前端渲染(15)
-  （JSON：debate + audit）    （分歧地图 + 审计印章 + 边界）
-```
 
-## 组件与赛道映射
+整个请求限制为 600 秒。SSE 只负责发送阶段事件，不会放宽时间限制。
 
-| 组件 | 满足赛道 | 说明 |
-|---|---|---|
-| `a2a_server.py` | 18 | Agent Card + A2A 协议 + 稳定在线 + ≤20min |
-| `agents.py` / `orchestration.py` | 18 | 对抗辩论 + 独立审计 = 真协作 |
-| `skills/` 封装 | 18 | QuantSkills（Verified）+ panda_data |
-| `web/`（前端） | 15 | 教练 UX、分歧地图、审计印章、合规边界 |
-| Qoder 人机分工说明 | 04 | 回答 AI 承担的角色及人与智能体如何分工；开发记录可选 |
-| `docs/build-in-public/` | 07 | 小红书笔记素材归档 |
+## 六个 Skill
 
-## 关键非功能约束（来自 18 硬要求）
-- **稳定在线**：评审期服务不可掉线 → 部署带健康检查 + 自动重启（见 `service_checklist.md`）。
-- **总响应 ≤ 20 分钟**：辩论要设 per-agent 超时 + 全局预算；用 streaming 先吐进度，避免评委等待感。
-- **可解释**：每条结论回链到具体 skill 调用与数据，审计结果显式呈现。
-- **合规**：输出统一经 `compliance.py` 过滤——禁"买/卖/收益承诺/荐股"，强制附风险提示。
+真实请求每次在线运行：
 
-## 数据窗口策略（7 天权限）
-- 开通后立即用 `panda_data` 拉取 demo 标的所需历史数据，落 DuckDB/Parquet 本地缓存（QuantSkills 自带 data warehouse 能力）。
-- 联调与终审都走缓存，避免窗口过期或限流影响现场。
+1. `corporate-action-adjustment-auditor`
+2. `survivorship-universe-auditor`
+3. `portfolio-liquidity-stress-test`
+4. `index-rebalance-event-study`
 
-## 待群内确认（TODO(feishu)）
-- panda_data 的确切安装/鉴权/调用签名
-- QuantSkills 各 skill 仓库的调用入口
-- A2A 示例 Agent Card 字段 + 测试环境 URL
-- DeepSeek API base_url / key / 额度
+读取预计算结果：
+
+5. `factor-ranking-sage`
+6. `model-hpo-evidence-driven`
+
+本地仓库目录和当前运行时 JSON 使用 `skill-` 前缀。上面的名称是提交材料使用的六个 ID。
+
+## 数据与缓存
+
+真实研究当前只支持 A 股。固定演示标的是 `600519.SH`、`300750.SZ` 和 `601318.SH`。港股或其他境外市场不会进入真实研究流程，而是返回 `insufficient-evidence`。
+
+PandaData 缓存键包含方法、参数、SDK 版本和数据版本。保存 Parquet 后计算 SHA-256；读取时会再次核验文件哈希。预计算报告还要检查提交号、数据哈希、来源文件哈希和标的范围。
+
+## 来源和状态
+
+| 值 | 含义 |
+|---|---|
+| `live` | 本次从 PandaData 新取的数据或基于该数据在线运行的 Skill |
+| `cache` | 经内容哈希核验的本地数据或基于该数据在线运行的 Skill |
+| `precomputed` | 与当前构建和来源文件相符的因子或 HPO 报告 |
+| `mock` | 离线开发用的固定模拟结果，不能当作真实证据 |
+| `insufficient-evidence` | 缺少必要字段、记录或报告，不能说成通过 |
+
+真实数据、模型或 Skill 失败时不会改用 mock。公开响应通过 `meta.modes`、`skills_manifest`、`status` 和 `dataset_hashes` 保留来源说明。
+
+## 模型与接口
+
+LLM 使用 Volcengine Ark 的 OpenAI 兼容接口。显示名称是 **DeepSeek V4 Pro**，`LLM_MODEL` 填活动提供的 Endpoint ID。A2A 服务公开 Agent Card，支持 SSE；设置 `A2A_BEARER_TOKEN` 后必须使用 Bearer 鉴权。
+
+## 合规限制
+
+系统只解释证据和风险，不给买卖指令、目标价、收益承诺，也不执行自动交易。所有公开文本经过 `backend/compliance.py`，缺失证据必须保持可见。

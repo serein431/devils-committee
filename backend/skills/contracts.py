@@ -1,13 +1,13 @@
-"""JSON shapes that mirror the REAL QuantSkills outputs (verified 2026-07-23).
+"""Shared evidence contracts for the six integrated QuantSkills.
 
-We keep these as plain builder functions so the mock SkillRunner emits payloads
-with the same field names the real CLIs produce. When SKILL_MODE=cli, the real
-`report.json` is parsed into these same keys — the rest of the engine is agnostic.
+The live path converts PandaData datasets, online CLI reports and verified
+precomputed reports into ``DatasetArtifact``, ``MarketDataBundle`` and
+``SkillResult``. The offline path uses the same dataclasses but is always marked
+``mode="mock"`` and is not public evidence.
 
 Grounding notes from the real repos:
   - survivorship-universe-auditor: reports "已证实的问题" (proven issues) and
     missing-evidence SEPARATELY; never writes missing evidence up as "pass".
-  - intraday-data-quality-auditor: flags timestamp / gap / price / volume defects.
   - corporate-action-adjustment-auditor: split & cash-dividend consistency.
   - model-hpo-evidence-driven: evidence-driven HPO, guards over-fitting.
   - factor-ranking-sage: ranks/selects factors from local factor+label CSVs.
@@ -84,7 +84,9 @@ class SkillResult:
         return asdict(self)
 
 
-# --- factor / evidence producing skills ------------------------------------
+# --- Legacy plain-dict helpers ---------------------------------------------
+# Kept only for compatibility with callers outside the six-Skill runner. The
+# runtime integration uses the dataclasses above, not these helper dictionaries.
 def factor_ranking(symbol: str, factors: list[dict[str, Any]]) -> dict[str, Any]:
     """skill-factor-ranking-sage: ranked factors with IC-style metrics."""
     return {
@@ -121,7 +123,7 @@ def event_study(symbol: str, event: str, car_bps: float, window: str,
 
 
 def regime(model: str, tilt: str, rationale: str) -> dict[str, Any]:
-    """skill-dalio-all-weather / skill-templeton-global-contrarian / us-sector-rotation."""
+    """Return a generic legacy regime payload."""
     return {"skill": model, "tilt": tilt, "rationale": rationale}
 
 
@@ -149,7 +151,7 @@ def survivorship_audit(symbol: str, proven_issues: list[str],
 
 
 def data_quality_audit(symbol: str, defects: list[str]) -> dict[str, Any]:
-    """skill-intraday-data-quality-auditor / corporate-action-adjustment-auditor."""
+    """Legacy data-quality payload; not used by the six-Skill runner."""
     return {
         "skill": "skill-intraday-data-quality-auditor",
         "symbol": symbol,

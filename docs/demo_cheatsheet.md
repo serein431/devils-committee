@@ -1,39 +1,35 @@
-# 现场 Demo · 标的应对速查表
+# 现场 Demo · 三个 A 股研究示例
 
-> 生成模式：模型 `mock` · 数据 `mock` · 审计 `mock`。
-> ⚠️ 换模式（尤其 `DATA_MODE=panda` 真数据）结论会变——**用你现场要用的模式重跑本表**。
+演示前应使用现场环境重新运行 `scripts/demo_cheatsheet.py`。本表不预写审计结论，因为数据、缓存、预计算报告和模型状态都可能变化。
 
-| 标的 | 名称 | 标红数 | 审计结论 |
+| 标的 | 名称 | 研究重点 | 现场先检查 |
 |---|---|---|---|
-| `600519` | 贵州茅台 | 2 | bear:bad_data、risk:bad_data |
-| `000858` | 五粮液 | 0 | 全部通过 |
-| `601318` | 中国平安 | 3 | bear:bad_data、bull:selection_bias、risk:bad_data |
-| `000001` | 平安银行 | 3 | bear:bad_data、bull:selection_bias、risk:bad_data |
-| `600036` | 招商银行 | 2 | bear:bad_data、risk:bad_data |
-| `300750` | 宁德时代 | 0 | 全部通过 |
-| `002594` | 比亚迪 | 0 | 全部通过 |
-| `688981` | 中芯国际 | 2 | bear:bad_data、risk:bad_data |
-| `000002` | 万科A | 3 | bear:bad_data、bull:suspected_overfit、risk:bad_data |
-| `601899` | 紫金矿业 | 1 | bull:suspected_overfit |
-| `600030` | 中信证券 | 0 | 全部通过 |
-| `000651` | 格力电器 | 0 | 全部通过 |
-| `AAPL` | Apple | 2 | bear:bad_data、risk:bad_data |
-| `TSLA` | Tesla | 0 | 全部通过 |
-| `NVDA` | Nvidia | 1 | bull:suspected_overfit |
-| `MSFT` | Microsoft | 0 | 全部通过 |
-| `GOOG` | Google | 2 | bear:bad_data、risk:bad_data |
-| `META` | Meta | 3 | bear:bad_data、bull:suspected_overfit、risk:bad_data |
-| `AMZN` | Amazon | 1 | bull:suspected_overfit |
+| `600519.SH` | 贵州茅台 | 复权、分红、因子和流动性风险 | 数据状态、六个 Skill、来源标签 |
+| `300750.SZ` | 宁德时代 | 成长因子、波动、流动性和指数事件 | 数据状态、六个 Skill、来源标签 |
+| `601318.SH` | 中国平安 | 分红、股票池和风险证据 | 数据状态、六个 Skill、来源标签 |
 
-## 主持人应对（按结论类型）
+## 运行事实
 
-- **全部通过**（如五粮液/宁德/茅台外的多数）→ “这只票它挑不出毛病，就放行——证明审计是真的在分辨，不是逢多必红。这本身就是可信度。”
-- **bull:selection_bias** → “看，多头的因子被审计当场标红：小样本高 IC，像只挑赢家来吹。”
-- **bull:suspected_overfit** → “多头这条被判过拟合——像背答案考试，换套题就不灵，还被打回重证。”
-- **bear/risk:bad_data** → “空头/风控引用的价格序列被查出未复权跳空——证据本身带病，先修数据。”
-- **多条混合**（如中国平安/万科/Meta）→ 最有戏：多空两边都被挑出不同毛病，分歧地图最丰富。
+- 当前真实研究只支持 A 股。其他市场返回 `insufficient-evidence`。
+- 每个真实请求运行四个在线 QuantSkills，并读取两个预计算结果。
+- 在线 Skill 和单个 Agent 最多 120 秒；整个请求最多 600 秒。
+- LLM 在 Volcengine Ark 上显示为 **DeepSeek V4 Pro**，`LLM_MODEL` 填活动 Endpoint ID。
+- A2A 服务支持 Agent Card、SSE 和可选 Bearer 鉴权。
 
-## 稳妥选择
-- 想**必现标红**演高光：中国平安 `601318`、平安银行 `000001`、万科 `000002`、Meta（三条混合）。
-- 想演**审计会放行**（证明不唬人）：宁德 `300750`、五粮液 `000858`、中信证券 `600030`、Tesla。
-- 评委给的票不在表内也不慌——同样的引擎当场跑，结论可解释、带溯源。
+## 来源说明
+
+- `live`：本次新取数据。
+- `cache`：内容哈希核验通过的缓存。
+- `precomputed`：提交号和数据哈希可核验的报告。
+- `mock`：离线开发结果，不能作为真实证据。
+- `insufficient-evidence`：缺少必要证据，不能称为通过。
+
+真实来源失败时不会改成 mock。现场先说明当前来源和状态，再讲审计发现。没有审计标记不代表标的一定可靠。
+
+## 六个 Skill ID
+
+`corporate-action-adjustment-auditor`、`survivorship-universe-auditor`、`portfolio-liquidity-stress-test`、`index-rebalance-event-study`、`factor-ranking-sage`、`model-hpo-evidence-driven`。
+
+## 合规提示
+
+只展示证据、分歧和风险范围。不给买卖指令、目标价、收益承诺，也不执行自动交易。
