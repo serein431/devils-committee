@@ -1,39 +1,117 @@
-"""7-day-window data cache (service_checklist): pull once, serve from cache at
-judging. Proves the cache-first path returns without ever importing panda_data —
-which is exactly what protects the live demo if the window expires / rate-limits."""
-import dataclasses
+import hashlib
+import json
+from pathlib import Path
 
-from backend.config import CONFIG
-
-
-def test_cache_save_load_roundtrip(tmp_path, monkeypatch):
-    from backend.skills import cache
-    monkeypatch.setattr(cache, "CONFIG",
-                        dataclasses.replace(CONFIG, cache_dir=str(tmp_path)))
-    assert cache.load("600519.SH") is None
-    cache.save("600519.SH", {"dates": ["20240101"], "close": [100.0], "volume": [1e6]})
-    assert cache.is_cached("600519.SH")
-    got = cache.load("600519.SH")
-    assert got["close"] == [100.0]
+from backend.skills.cache import DatasetCache, cache_key, file_sha256
 
 
-def test_panda_mode_serves_from_cache_without_panda_data(tmp_path, monkeypatch):
-    from backend.skills import cache, data
-    cfg = dataclasses.replace(CONFIG, cache_dir=str(tmp_path), data_mode="panda")
-    monkeypatch.setattr(cache, "CONFIG", cfg)
-    monkeypatch.setattr(data, "CONFIG", cfg)
-    cache.save("600519.SH", {"dates": ["20240101", "20240102"],
-                             "close": [100.0, 101.0], "volume": [1e6, 1.1e6]})
-    # data_mode=panda + cache hit -> must NOT try to import/init panda_data
-    bars = data.get_stock_daily("600519.SH")
-    assert bars.source == "panda_cache"
-    assert bars.close == [100.0, 101.0]
-    assert bars.n == 2
+class _BytesFrame:
+    def __init__(self, payload: bytes, rows: int = 2):
+        self.payload = payload
+        self.rows = rows
+
+    def __len__(self):
+        return self.rows
+
+    def to_parquet(self, path, index=False):
+        assert index is False
+        Path(path).write_bytes(self.payload)
 
 
-def test_mock_mode_ignores_cache(tmp_path, monkeypatch):
-    from backend.skills import data
-    monkeypatch.setattr(data, "CONFIG",
-                        dataclasses.replace(CONFIG, cache_dir=str(tmp_path), data_mode="mock"))
-    bars = data.get_stock_daily("600519.SH")
-    assert bars.source == "mock"      # deterministic mock never consults the cache
+def test_cache_key_uses_all_inputs_and_canonical_json():
+    params = {"symbol": ["600519.SH"], "fields": [], "st": True}
+    canonical = json.dumps(
+        {
+            "method": "get_stock_daily",
+            "params": params,
+            "sdk_version": "0.0.12",
+            "data_version": "panda-2026-07",
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    assert cache_key(
+        "get_stock_daily",
+        params,
+        "0.0.12",
+        "panda-2026-07",
+    ) == expected
+    assert cache_key(
+        "get_stock_daily",
+        {"st": True, "fields": [], "symbol": ["600519.SH"]},
+        "0.0.12",
+        "panda-2026-07",
+    ) == expected
+
+
+def test_cache_save_load_roundtrip_verifies_artifact(tmp_path):
+    cache = DatasetCache(tmp_path, data_version="panda-2026-07")
+    params = {"symbol": ["600519.SH"], "start_date": "20240101"}
+    frame = _BytesFrame(b"verified parquet bytes", rows=2)
+
+    saved = cache.save(
+        "daily",
+        "get_stock_daily",
+        params,
+        "0.0.12",
+        frame,
+    )
+    loaded = cache.load(
+        "daily",
+        "get_stock_daily",
+        params,
+        "0.0.12",
+    )
+
+    assert saved.mode == "live"
+    assert saved.rows == 2
+    assert saved.sha256 == file_sha256(Path(saved.path))
+    assert loaded is not None
+    assert loaded.mode == "cache"
+    assert loaded.path == saved.path
+    assert loaded.sha256 == saved.sha256
+    assert loaded.rows == 2
+
+
+def test_cache_hash_mismatch_is_a_miss(tmp_path):
+    cache = DatasetCache(tmp_path, data_version="panda-2026-07")
+    params = {"symbol": ["600519.SH"]}
+    saved = cache.save(
+        "daily",
+        "get_stock_daily",
+        params,
+        "0.0.12",
+        _BytesFrame(b"original"),
+    )
+    Path(saved.path).write_bytes(b"tampered")
+
+    assert cache.load(
+        "daily",
+        "get_stock_daily",
+        params,
+        "0.0.12",
+    ) is None
+
+
+def test_cache_corrupt_metadata_is_a_miss(tmp_path):
+    cache = DatasetCache(tmp_path, data_version="panda-2026-07")
+    params = {"symbol": ["600519.SH"]}
+    saved = cache.save(
+        "daily",
+        "get_stock_daily",
+        params,
+        "0.0.12",
+        _BytesFrame(b"original"),
+    )
+    Path(saved.path).with_suffix(".json").write_text("not-json", encoding="utf-8")
+
+    assert cache.load(
+        "daily",
+        "get_stock_daily",
+        params,
+        "0.0.12",
+    ) is None

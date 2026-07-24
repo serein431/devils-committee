@@ -14,7 +14,74 @@ Grounding notes from the real repos:
 """
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal
+
+
+ResultStatus = Literal["success", "insufficient-evidence", "error"]
+SourceMode = Literal["live", "cache", "precomputed", "mock"]
+
+
+@dataclass(frozen=True)
+class DatasetArtifact:
+    """One immutable, content-addressed market dataset."""
+
+    name: str
+    method: str
+    params: dict[str, Any]
+    path: str
+    sha256: str
+    rows: int
+    mode: Literal["live", "cache", "mock"]
+    fetched_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MarketDataBundle:
+    """Datasets and public warnings used by one research request."""
+
+    symbol: str
+    status: ResultStatus
+    mode: Literal["live", "cache", "mock"]
+    datasets: dict[str, DatasetArtifact] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+
+    @classmethod
+    def insufficient(cls, symbol: str, reason: str) -> "MarketDataBundle":
+        return cls(symbol, "insufficient-evidence", "live", warnings=[reason])
+
+    @property
+    def dataset_hashes(self) -> list[str]:
+        return sorted({artifact.sha256 for artifact in self.datasets.values()})
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SkillFinding:
+    claim: str
+    evidence_refs: list[str]
+    confidence: float
+
+
+@dataclass
+class SkillResult:
+    skill_id: str
+    mode: SourceMode
+    status: ResultStatus
+    duration_ms: int
+    dataset_hashes: list[str]
+    assumptions: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    findings: list[SkillFinding] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 # --- factor / evidence producing skills ------------------------------------

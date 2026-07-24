@@ -1,47 +1,141 @@
-"""Local data cache for the 7-day panda_data window (service_checklist 要求).
+"""Content-addressed local cache for verified PandaData datasets."""
 
-Pull the demo tickers ONCE inside the 7-day access window, land them on disk, and
-serve from cache during judging — so a window expiry or rate-limit can never break
-the live demo. Plain JSON via stdlib (no DuckDB/parquet dep needed); the format is
-trivial to swap for parquet later if size matters.
-
-Only used when DATA_MODE=panda. Mock data is deterministic and needs no cache.
-"""
 from __future__ import annotations
 
+import hashlib
 import json
-import os
-from typing import Optional
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
-from ..config import CONFIG
-
-
-def _path(symbol: str) -> str:
-    safe = symbol.replace("/", "_").replace("\\", "_")
-    return os.path.join(CONFIG.cache_dir, "bars", f"{safe}.json")
+from .contracts import DatasetArtifact
 
 
-def load(symbol: str) -> Optional[dict]:
-    """Return cached bar dict for `symbol`, or None if not cached."""
-    p = _path(symbol)
-    if not os.path.exists(p):
-        return None
-    try:
-        with open(p, encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return None
+def cache_key(
+    method: str,
+    params: dict[str, Any],
+    sdk_version: str,
+    data_version: str,
+) -> str:
+    """Return a deterministic key for one exact dataset request."""
+    body = json.dumps(
+        {
+            "method": method,
+            "params": params,
+            "sdk_version": sdk_version,
+            "data_version": data_version,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def save(symbol: str, payload: dict) -> None:
-    """Persist a bar dict for `symbol` (creates the cache dir tree)."""
-    p = _path(symbol)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False)
-    os.replace(tmp, p)          # atomic: a crash mid-write never corrupts the cache
+def file_sha256(path: Path) -> str:
+    """Hash a file without loading it all into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def is_cached(symbol: str) -> bool:
-    return os.path.exists(_path(symbol))
+class DatasetCache:
+    """Store Parquet data with separately verified canonical metadata."""
+
+    def __init__(self, root: str | Path, data_version: str) -> None:
+        self.root = Path(root)
+        self.data_version = data_version
+
+    def load(
+        self,
+        name: str,
+        method: str,
+        params: dict[str, Any],
+        sdk_version: str,
+    ) -> DatasetArtifact | None:
+        key = cache_key(method, params, sdk_version, self.data_version)
+        meta_path = self.root / name / f"{key}.json"
+        data_path = self.root / name / f"{key}.parquet"
+        if not meta_path.is_file() or not data_path.is_file():
+            return None
+
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                return None
+            if meta.get("name") != name or meta.get("method") != method:
+                return None
+            if meta.get("params") != params:
+                return None
+            if meta.get("sdk_version") != sdk_version:
+                return None
+            if meta.get("data_version") != self.data_version:
+                return None
+            if file_sha256(data_path) != meta.get("sha256"):
+                return None
+            return DatasetArtifact(
+                name=name,
+                method=method,
+                params=params,
+                path=str(data_path),
+                sha256=str(meta["sha256"]),
+                rows=int(meta["rows"]),
+                mode="cache",
+                fetched_at=str(meta["fetched_at"]),
+            )
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    def save(
+        self,
+        name: str,
+        method: str,
+        params: dict[str, Any],
+        sdk_version: str,
+        frame: Any,
+    ) -> DatasetArtifact:
+        key = cache_key(method, params, sdk_version, self.data_version)
+        target = self.root / name
+        target.mkdir(parents=True, exist_ok=True)
+        data_path = target / f"{key}.parquet"
+        data_temp = target / f"{key}.parquet.tmp"
+        meta_path = target / f"{key}.json"
+        meta_temp = target / f"{key}.json.tmp"
+
+        try:
+            frame.to_parquet(data_temp, index=False)
+            data_temp.replace(data_path)
+            artifact = DatasetArtifact(
+                name=name,
+                method=method,
+                params=params,
+                path=str(data_path),
+                sha256=file_sha256(data_path),
+                rows=len(frame),
+                mode="live",
+                fetched_at=datetime.now(timezone.utc).isoformat(),
+            )
+            metadata = {
+                **artifact.to_dict(),
+                "sdk_version": sdk_version,
+                "data_version": self.data_version,
+            }
+            meta_temp.write_text(
+                json.dumps(
+                    metadata,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            meta_temp.replace(meta_path)
+            return artifact
+        finally:
+            for temporary in (data_temp, meta_temp):
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass

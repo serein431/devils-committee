@@ -3,20 +3,23 @@
 DATA_MODE=mock (default): deterministic synthetic daily bars so the whole engine
 runs offline and reproducibly (no Date.now/random — seeded by the symbol).
 
-DATA_MODE=panda: real panda_data==0.0.12. Per the plan's 7-day data window, we
-pull once into a DuckDB/Parquet cache and read the cache during judging so a
-window expiry or rate-limit can't break the live demo.
+DATA_MODE=panda: real panda_data==0.0.12. Matching requests use verified Parquet
+cache files; cache misses call PandaData and never substitute synthetic bars.
 
 TODO(feishu): confirm exact panda_data auth + method signatures from the group.
 """
 from __future__ import annotations
 
 import hashlib
-import logging
 from dataclasses import dataclass
 from typing import Any
 
 from ..config import CONFIG
+from ..research_request import ResearchRequest, normalize_symbol
+
+
+class EvidenceUnavailable(RuntimeError):
+    """Public error raised when verified market evidence cannot be read."""
 
 
 @dataclass
@@ -141,37 +144,41 @@ def get_stock_daily(symbol: str, start_date: str = "20220101",
     if CONFIG.data_mode != "panda":
         return _mock_bars(symbol)
 
-    # --- real path (needs Feishu creds) ------------------------------------
-    # Cache-first: pull ONCE inside the 7-day window, serve from cache at judging
-    # so a window expiry / rate-limit can't break the live demo (service_checklist).
-    from . import cache
-    cached = cache.load(symbol)
-    if cached:
-        return DailyBars(symbol=symbol, dates=cached["dates"], close=cached["close"],
-                         volume=cached["volume"], source="panda_cache")
+    from .panda import build_market_data_bundle
 
+    normalized_symbol, market = normalize_symbol(symbol)
+    request = ResearchRequest(
+        symbol=normalized_symbol,
+        market=market,
+        question="daily market data",
+        start_date=start_date,
+        end_date=end_date,
+    )
+    bundle = build_market_data_bundle(request)
+    if bundle.status != "success" or "daily" not in bundle.datasets:
+        warning = bundle.warnings[-1] if bundle.warnings else "daily dataset unavailable"
+        raise EvidenceUnavailable(warning)
+
+    artifact = bundle.datasets["daily"]
     try:
-        import panda_data  # type: ignore
-        panda_data.init_token(
-            username=CONFIG.panda_username,
-            password=CONFIG.panda_password,
-            base_url=CONFIG.panda_base_url,
-        )
-        df = panda_data.get_stock_daily(
-            symbol=[symbol], start_date=start_date, end_date=end_date,
-            fields=[], indicator="000300", st=True,
-        )
-        dates, close, vol = _parse_panda_df(df)
-        if not close:
-            raise ValueError("empty result from panda_data")
-        cache.save(symbol, {"dates": dates, "close": close, "volume": vol})
-        return DailyBars(symbol=symbol, dates=dates, close=close,
-                         volume=vol, source="panda_live")
-    except Exception as e:
-        # Never crash the live demo on a data hiccup — degrade to deterministic mock.
-        logging.getLogger("devils-committee").warning(
-            "panda_data fetch failed for %s (%s); using mock bars", symbol, str(e)[:120])
-        return _mock_bars(symbol)
+        import pandas as pd  # type: ignore
+
+        frame = pd.read_parquet(artifact.path)
+        dates, close, volume = _parse_panda_df(frame)
+    except EvidenceUnavailable:
+        raise
+    except Exception:
+        raise EvidenceUnavailable("daily dataset unreadable") from None
+    if not close:
+        raise EvidenceUnavailable("daily dataset unavailable")
+    source = "panda_live" if artifact.mode == "live" else "panda_cache"
+    return DailyBars(
+        symbol=normalized_symbol,
+        dates=dates,
+        close=close,
+        volume=volume,
+        source=source,
+    )
 
 
 def _col(df, names: list[str]):
