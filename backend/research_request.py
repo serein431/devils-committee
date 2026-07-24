@@ -27,13 +27,17 @@ def normalize_symbol(value: str) -> tuple[str, str]:
 
 
 def symbol_from_text(text: str) -> tuple[str, str]:
-    match = re.search(
-        r"(?i)(?<![A-Za-z0-9_])(?:sh|sz)?\d{6}"
-        r"(?:\.[A-Za-z0-9_.-]+)?(?![A-Za-z0-9_]|\.[A-Za-z0-9_])",
+    candidate = re.search(
+        r"(?i)(?<![A-Za-z0-9_])(?:sh|sz)?\d{6}",
         text,
     )
-    if match:
-        return normalize_symbol(match.group(0))
+    if candidate:
+        match = re.match(
+            r"(?i)(?:sh|sz)?\d{6}(?:\.(?:sh|sz))?"
+            r"(?![A-Za-z0-9_]|\.+(?=[^.\s]))",
+            text[candidate.start():],
+        )
+        return normalize_symbol(match.group(0)) if match else ("UNKNOWN", "unknown")
     for match in re.finditer(
         r"(?<![A-Za-z0-9_])(\d{5}\.HK|[A-Z]{1,5})(?![A-Za-z0-9_])",
         text,

@@ -49,6 +49,15 @@ def test_text_symbol_rejects_hyphenated_suffix():
     assert symbol_from_text("研究 SH600519.-SZ") == ("UNKNOWN", "unknown")
 
 
+def test_text_symbol_allows_sentence_ending_dot_runs():
+    assert symbol_from_text("研究 600519.SZ.") == ("600519.SZ", "cn")
+    assert symbol_from_text("研究 600519.SZ...") == ("600519.SZ", "cn")
+
+
+def test_text_symbol_rejects_dollar_suffix():
+    assert symbol_from_text("研究 600519.$SZ") == ("UNKNOWN", "unknown")
+
+
 def test_payload_fields_override_text_defaults():
     req = ResearchRequest.from_payload({
         "topic": "分析 600519",
