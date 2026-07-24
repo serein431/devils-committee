@@ -39,7 +39,7 @@
 | `agents.py` / `orchestration.py` | 18 | 对抗辩论 + 独立审计 = 真协作 |
 | `skills/` 封装 | 18 | QuantSkills（Verified）+ panda_data |
 | `web/`（前端） | 15 | 教练 UX、分歧地图、审计印章、合规边界 |
-| 全程 Qoder 开发 + 录屏 | 04 | 多智能体协作开发证据 |
+| Qoder 人机分工说明 | 04 | 回答 AI 承担的角色及人与智能体如何分工；开发记录可选 |
 | `docs/build-in-public/` | 07 | 小红书笔记素材归档 |
 
 ## 关键非功能约束（来自 18 硬要求）

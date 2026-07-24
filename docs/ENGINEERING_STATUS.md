@@ -40,7 +40,7 @@
 ## 还差什么（只有你们能做）
 1. 进 PandaAI 飞书群领 **DeepSeek Key / panda_data 凭证 / 测试环境**（→ `setup_real.py --check --enable ...`）
 2. **今天发第一条小红书**（草稿 `docs/build-in-public/note-01.md`）
-3. 开 **Qoder PRO** 录多智能体开发（`docs/qoder-process/`）
+3. 完成 Qoder 两项文书；如有真实开发记录，可整理到 `docs/qoder-process/` 作为补充
 4. 拉 **2–3 个真小白**试用录反应（`docs/user-tests/`）
 5. **看主题 E Reverse 官方视频**确认方向
 6. 公网上线 + `smoke_a2a.py` 自检

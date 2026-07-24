@@ -6,12 +6,13 @@
 |---|---|---|---|
 | **18 PandaAI** | [`SUBMISSION_18.md`](SUBMISSION_18.md) | `scripts/gen_submission.py`（实跑生成） | 公网 URL、GitHub、演示视频、团队联系方式 |
 | **15 度小满** | [`SUBMISSION_15.md`](SUBMISSION_15.md) | `scripts/gen_submission_15.py`（实跑生成） | 访问链接、**真实用户使用数据** |
-| **04 Qoder** | [`SUBMISSION_04_qoder.md`](SUBMISSION_04_qoder.md) | 手写 | **Qoder 多智能体开发录屏/截图** |
+| **04 Qoder** | [`SUBMISSION_04_qoder.md`](SUBMISSION_04_qoder.md) | 手写 | **完整回答项目问题与人机分工**；截图/录屏可选 |
 | **05 智能少年** | [`SUBMISSION_05_teen.md`](SUBMISSION_05_teen.md) | 手写 | **2–3 个真小白试用录像 + 原话** |
 | **07 小红书** | [`SUBMISSION_07_xhs.md`](SUBMISSION_07_xhs.md) | 手写 | **今天发首帖**，比赛期持续更 + 真回评论 |
 | **主题 E Reverse** | [`SUBMISSION_E_reverse.md`](SUBMISSION_E_reverse.md) | 手写 | **看官方视频确认方向能对上** |
 
 ## 支撑文档
+- [`OFFICIAL_REQUIREMENTS.md`](OFFICIAL_REQUIREMENTS.md) — 五个参评方向的官方要求、当前缺项和提交前检查
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — 系统架构、数据流、A2A 清单
 - [`service_checklist.md`](service_checklist.md) — 18 命脉：上线/稳定性/联调/提交物/红线
 - [`demo_script.md`](demo_script.md) — 现场 3 分钟逐秒编舞 + 评委席差异化 + 兜底预案
@@ -23,7 +24,7 @@
 ## 人工待办总清单（只有你们能做的）
 1. **注册 pandaaiquant.com + 进 PandaAI 飞书群** → 领 7 天数据 / DeepSeek Key / 示例 Agent Card / 测试环境 URL / panda_data 账密。（解锁 real 模式）
 2. **今天发第一条小红书**立项帖（07 分数是时间的函数）。
-3. **开 Qoder PRO** 并录多智能体开发过程（04 的 30%）。
+3. 完成 Qoder 的项目问题与人机分工说明；已有开发截图或录屏可作为补充材料。
 4. **拉 2–3 个真小白**试用并录反应（05/15/07 最强证据）。
 5. **看一遍主题 E Reverse 官方视频**确认方向（现在是推测）。
 6. **公网上线**：`scripts/expose_tunnel.sh 8080`（需 Cloudflare 登录）+ 设 `PUBLIC_URL`，然后 `python scripts/smoke_a2a.py --url <公网地址>` 自检 13 项全绿。
