@@ -4,11 +4,33 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import fcntl
+
 from .contracts import DatasetArtifact
+
+
+_SAFE_DATASET_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+_IN_PROCESS_LOCKS: dict[str, threading.Lock] = {}
+_IN_PROCESS_LOCKS_GUARD = threading.Lock()
+
+
+def _validate_dataset_name(name: str) -> None:
+    if not isinstance(name, str) or _SAFE_DATASET_NAME.fullmatch(name) is None:
+        raise ValueError("invalid dataset name")
+
+
+def _in_process_lock(lock_path: Path) -> threading.Lock:
+    identity = str(lock_path.resolve())
+    with _IN_PROCESS_LOCKS_GUARD:
+        return _IN_PROCESS_LOCKS.setdefault(identity, threading.Lock())
 
 
 def cache_key(
@@ -48,6 +70,18 @@ class DatasetCache:
         self.root = Path(root)
         self.data_version = data_version
 
+    def _dataset_dir(self, name: str) -> Path:
+        _validate_dataset_name(name)
+        root = self.root.resolve()
+        target = self.root / name
+        if target.is_symlink():
+            raise ValueError("unsafe dataset path")
+        try:
+            target.resolve().relative_to(root)
+        except ValueError:
+            raise ValueError("unsafe dataset path") from None
+        return target
+
     def load(
         self,
         name: str,
@@ -55,9 +89,10 @@ class DatasetCache:
         params: dict[str, Any],
         sdk_version: str,
     ) -> DatasetArtifact | None:
+        target = self._dataset_dir(name)
         key = cache_key(method, params, sdk_version, self.data_version)
-        meta_path = self.root / name / f"{key}.json"
-        data_path = self.root / name / f"{key}.parquet"
+        meta_path = target / f"{key}.json"
+        data_path = target / f"{key}.parquet"
         if not meta_path.is_file() or not data_path.is_file():
             return None
 
@@ -96,43 +131,56 @@ class DatasetCache:
         sdk_version: str,
         frame: Any,
     ) -> DatasetArtifact:
+        target = self._dataset_dir(name)
         key = cache_key(method, params, sdk_version, self.data_version)
-        target = self.root / name
         target.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink():
+            raise ValueError("unsafe dataset path")
         data_path = target / f"{key}.parquet"
-        data_temp = target / f"{key}.parquet.tmp"
         meta_path = target / f"{key}.json"
-        meta_temp = target / f"{key}.json.tmp"
+        lock_path = target / f"{key}.lock"
+        writer_id = f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}"
+        data_temp = target / f"{key}.parquet.tmp-{writer_id}"
+        meta_temp = target / f"{key}.json.tmp-{writer_id}"
 
         try:
-            frame.to_parquet(data_temp, index=False)
-            data_temp.replace(data_path)
-            artifact = DatasetArtifact(
-                name=name,
-                method=method,
-                params=params,
-                path=str(data_path),
-                sha256=file_sha256(data_path),
-                rows=len(frame),
-                mode="live",
-                fetched_at=datetime.now(timezone.utc).isoformat(),
-            )
-            metadata = {
-                **artifact.to_dict(),
-                "sdk_version": sdk_version,
-                "data_version": self.data_version,
-            }
-            meta_temp.write_text(
-                json.dumps(
-                    metadata,
-                    sort_keys=True,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                encoding="utf-8",
-            )
-            meta_temp.replace(meta_path)
-            return artifact
+            process_lock = _in_process_lock(lock_path)
+            with process_lock, lock_path.open("a+b") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    frame.to_parquet(data_temp, index=False)
+                    digest = file_sha256(data_temp)
+                    data_temp.replace(data_path)
+                    artifact = DatasetArtifact(
+                        name=name,
+                        method=method,
+                        params=params,
+                        path=str(data_path),
+                        sha256=digest,
+                        rows=len(frame),
+                        mode="live",
+                        fetched_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    metadata = {
+                        **artifact.to_dict(),
+                        "sdk_version": sdk_version,
+                        "data_version": self.data_version,
+                    }
+                    meta_temp.write_text(
+                        json.dumps(
+                            metadata,
+                            sort_keys=True,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        encoding="utf-8",
+                    )
+                    meta_temp.replace(meta_path)
+                    if file_sha256(data_path) != digest:
+                        raise OSError("cache verification failed")
+                    return artifact
+                finally:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
         finally:
             for temporary in (data_temp, meta_temp):
                 try:

@@ -1,7 +1,9 @@
 import dataclasses
+import builtins
 import json
 import sys
 import types
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -166,6 +168,84 @@ def test_live_request_error_is_public_and_never_mock(monkeypatch, tmp_path):
     assert "token detail" not in public_result
 
 
+def test_cached_daily_survives_authentication_failure(monkeypatch, tmp_path):
+    from backend.skills.cache import DatasetCache
+
+    panda, _ = _panda_mode(monkeypatch, tmp_path)
+    request = _request()
+    method, params_factory = panda.DATASET_CALLS["daily"]
+    cache = DatasetCache(tmp_path, CONFIG.data_version)
+    cache.save(
+        "daily",
+        method,
+        params_factory(request),
+        "0.0.12",
+        _FakeFrame([
+            {"date": "20240101", "symbol": "600519.SH", "close": 10.0, "volume": 100},
+        ]),
+    )
+    module = _install_fake_panda(monkeypatch, daily_error=AssertionError("must not fetch"))
+    service_calls = []
+
+    def reject_service_call(method_name):
+        def reject(**kwargs):
+            service_calls.append(method_name)
+            raise AssertionError("service method called after authentication failure")
+
+        return reject
+
+    for method_name, _ in panda.DATASET_CALLS.values():
+        setattr(module, method_name, reject_service_call(method_name))
+    module.init_token = lambda **kwargs: (_ for _ in ()).throw(
+        RuntimeError("private authentication response")
+    )
+
+    bundle = panda.build_market_data_bundle(request)
+    public_result = json.dumps(bundle.to_dict(), ensure_ascii=False)
+
+    assert bundle.status == "success"
+    assert bundle.mode == "cache"
+    assert bundle.datasets["daily"].mode == "cache"
+    assert "PandaData authentication unavailable" in bundle.warnings
+    assert service_calls == []
+    assert "RuntimeError" not in public_result
+    assert "private authentication response" not in public_result
+
+
+def test_cached_daily_is_used_when_panda_module_import_fails(monkeypatch, tmp_path):
+    from backend.skills.cache import DatasetCache
+
+    panda, _ = _panda_mode(monkeypatch, tmp_path)
+    request = _request()
+    method, params_factory = panda.DATASET_CALLS["daily"]
+    DatasetCache(tmp_path, CONFIG.data_version).save(
+        "daily",
+        method,
+        params_factory(request),
+        "0.0.12",
+        _FakeFrame([
+            {"date": "20240101", "symbol": "600519.SH", "close": 10.0, "volume": 100},
+        ]),
+    )
+    original_import = builtins.__import__
+
+    def reject_panda_import(name, *args, **kwargs):
+        if name == "panda_data":
+            raise ImportError("private import detail")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_panda_import)
+    monkeypatch.delitem(sys.modules, "panda_data", raising=False)
+
+    bundle = panda.build_market_data_bundle(request)
+
+    assert bundle.status == "success"
+    assert bundle.mode == "cache"
+    assert bundle.datasets["daily"].mode == "cache"
+    assert "PandaData authentication unavailable" in bundle.warnings
+    assert "private import detail" not in " ".join(bundle.warnings)
+
+
 def test_normalize_frame_cleans_dates_sorts_and_deduplicates():
     from backend.skills.panda import normalize_frame
 
@@ -181,6 +261,59 @@ def test_normalize_frame_cleans_dates_sorts_and_deduplicates():
     assert [row["date"] for row in normalized.rows] == ["", "20240102", "20240103"]
     assert all(len(row["date"]) == 8 for row in normalized.rows if row["date"])
     assert len(normalized) == 3
+
+
+def test_normalize_frame_handles_real_pandas_date_scalars():
+    pd = pytest.importorskip("pandas")
+    np = pytest.importorskip("numpy")
+    from backend.skills.panda import normalize_frame
+
+    frame = pd.DataFrame({
+        "date": [
+            pd.Timestamp("2024-01-01 12:30:00"),
+            datetime(2024, 1, 2, 9, 15),
+            date(2024, 1, 3),
+            np.datetime64("2024-01-04"),
+            pd.NaT,
+            pd.NA,
+            np.nan,
+            20240105,
+            20240106.0,
+            "20240107",
+            "2024-01-08",
+            "2024-01-09 23:59:59",
+        ],
+        "symbol": ["600519.SH"] * 12,
+        "row_id": list(range(12)),
+    })
+
+    normalized = normalize_frame(frame)
+    values = normalized["date"].tolist()
+
+    assert values == [
+        "",
+        "",
+        "",
+        "20240101",
+        "20240102",
+        "20240103",
+        "20240104",
+        "20240105",
+        "20240106",
+        "20240107",
+        "20240108",
+        "20240109",
+    ]
+    assert all(value == "" or (len(value) == 8 and value.isdigit()) for value in values)
+
+
+@pytest.mark.parametrize("value", ["not-a-date", "2024-01-01 garbage"])
+def test_normalize_frame_rejects_unparseable_real_pandas_date(value):
+    pd = pytest.importorskip("pandas")
+    from backend.skills.panda import normalize_frame
+
+    with pytest.raises(ValueError, match="invalid date value"):
+        normalize_frame(pd.DataFrame({"date": [value]}))
 
 
 @pytest.mark.parametrize(
@@ -227,6 +360,37 @@ def test_data_layer_raises_public_error_when_daily_is_insufficient(monkeypatch, 
     _install_fake_panda(monkeypatch, daily=_FakeFrame([]))
 
     with pytest.raises(data.EvidenceUnavailable, match="daily dataset unavailable"):
+        data.get_stock_daily("600519.SH", "20240101", "20240131")
+
+
+def test_data_layer_rejects_real_daily_without_volume(monkeypatch, tmp_path):
+    from backend.skills.contracts import DatasetArtifact, MarketDataBundle
+
+    panda, data = _panda_mode(monkeypatch, tmp_path)
+    artifact = DatasetArtifact(
+        name="daily",
+        method="get_stock_daily",
+        params={},
+        path=str(tmp_path / "daily.parquet"),
+        sha256="abc",
+        rows=1,
+        mode="cache",
+        fetched_at="2026-07-24T00:00:00+00:00",
+    )
+    bundle = MarketDataBundle(
+        "600519.SH",
+        "success",
+        "cache",
+        {"daily": artifact},
+    )
+    monkeypatch.setattr(panda, "build_market_data_bundle", lambda request: bundle)
+    pandas_module = types.ModuleType("pandas")
+    pandas_module.read_parquet = lambda path: _FakeFrame([
+        {"date": "20240101", "close": 10.0},
+    ])
+    monkeypatch.setitem(sys.modules, "pandas", pandas_module)
+
+    with pytest.raises(data.EvidenceUnavailable, match="daily volume unavailable"):
         data.get_stock_daily("600519.SH", "20240101", "20240131")
 
 

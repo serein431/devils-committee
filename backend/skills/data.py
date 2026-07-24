@@ -201,9 +201,9 @@ def _parse_panda_df(df):
     dates = [str(d) for d in _col(df, ["date", "trade_date", "datetime", "day"])]
     close = [float(c) for c in _col(df, ["close", "close_price", "adj_close", "closePrice"])]
     try:
-        vol = [float(v) for v in _col(df, ["volume", "vol", "turnover_volume", "amount"])]
+        vol = [float(v) for v in _col(df, ["volume", "vol", "qty", "turnover_volume"])]
     except KeyError:
-        vol = list(close)                     # volume optional; fall back to a stand-in
+        raise EvidenceUnavailable("daily volume unavailable") from None
     rows = sorted(zip(dates, close, vol), key=lambda r: r[0])   # oldest -> newest
     if not rows:
         return [], [], []

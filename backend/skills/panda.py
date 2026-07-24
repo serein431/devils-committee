@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
+from datetime import date, datetime
+from numbers import Real
 from typing import Any, Callable
 
 from ..config import CONFIG
@@ -129,6 +133,67 @@ SENSITIVE_COLUMN_PARTS = {
     "cookie",
 }
 
+_TIME_SUFFIX = (
+    r"(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?)?"
+)
+_COMPACT_DATE = re.compile(r"^(\d{8})(?:\.0+)?$")
+_COMPACT_DATETIME = re.compile(rf"^(\d{{8}}){_TIME_SUFFIX}$")
+_SEPARATED_DATE = re.compile(
+    rf"^(\d{{4}})[-/](\d{{1,2}})[-/](\d{{1,2}}){_TIME_SUFFIX}$"
+)
+
+
+def _date_value_is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        import pandas as pd  # type: ignore
+    except ImportError:
+        pd = None
+    if pd is not None:
+        try:
+            missing = pd.isna(value)
+        except Exception:
+            missing = False
+        if isinstance(missing, bool) or type(missing).__name__ == "bool_":
+            return bool(missing)
+    if isinstance(value, Real):
+        try:
+            return math.isnan(float(value))
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _normalize_date_value(value: Any) -> str:
+    """Normalize one scalar date without importing pandas on mock-only paths."""
+    if _date_value_is_missing(value):
+        return ""
+    if isinstance(value, (datetime, date)):
+        return value.strftime("%Y%m%d")
+
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    match = _COMPACT_DATE.fullmatch(raw) or _COMPACT_DATETIME.fullmatch(raw)
+    if match:
+        normalized = match.group(1)
+    else:
+        separated = _SEPARATED_DATE.fullmatch(raw)
+        if separated is None:
+            raise ValueError("invalid date value")
+        year, month, day = separated.groups()
+        normalized = f"{year}{int(month):02d}{int(day):02d}"
+
+    try:
+        datetime.strptime(normalized, "%Y%m%d")
+    except ValueError:
+        raise ValueError("invalid date value") from None
+    if re.fullmatch(r"\d{8}", normalized) is None:
+        raise ValueError("invalid date value")
+    return normalized
+
 
 def normalize_frame(frame: Any) -> Any:
     """Return a sorted, deduplicated frame without sensitive columns."""
@@ -145,13 +210,7 @@ def normalize_frame(frame: Any) -> Any:
 
     for column in clean.columns:
         if column == "date" or column.endswith("_date"):
-            clean[column] = clean[column].map(
-                lambda value: (
-                    ""
-                    if value is None
-                    else str(value).replace("-", "").split(".")[0]
-                )
-            )
+            clean[column] = clean[column].map(_normalize_date_value)
 
     order = [
         column
@@ -208,53 +267,67 @@ def build_market_data_bundle(request: ResearchRequest) -> MarketDataBundle:
         return build_mock_bundle(request)
 
     cache = DatasetCache(CONFIG.cache_dir, CONFIG.data_version)
+    panda_data = None
     try:
         import panda_data  # type: ignore
-
-        panda_data.init_token(
-            username=CONFIG.panda_username,
-            password=CONFIG.panda_password,
-            base_url=CONFIG.panda_base_url,
-        )
         sdk_version = str(getattr(panda_data, "__version__", None) or "0.0.12")
     except Exception:
-        return MarketDataBundle.insufficient(
-            request.symbol,
-            "PandaData authentication unavailable",
-        )
+        sdk_version = "0.0.12"
 
     datasets: dict[str, DatasetArtifact] = {}
     warnings: list[str] = []
+    missing: list[tuple[str, str, dict[str, Any]]] = []
     for name, (method_name, params_factory) in DATASET_CALLS.items():
         params = params_factory(request)
         cached = cache.load(name, method_name, params, sdk_version)
         if cached is not None:
             datasets[name] = cached
             continue
+        missing.append((name, method_name, params))
 
-        try:
-            frame = getattr(panda_data, method_name)(**params)
-            if frame is None or len(frame) == 0:
-                warnings.append(f"{name} returned no rows")
-                continue
-            normalized = normalize_frame(frame)
-            if len(normalized) == 0:
-                warnings.append(f"{name} returned no rows")
-                continue
-            datasets[name] = cache.save(
-                name,
-                method_name,
-                params,
-                sdk_version,
-                normalized,
-            )
-        except Exception:
-            warnings.append(f"{name} request failed")
+    authenticated = False
+    if missing:
+        if panda_data is None:
+            warnings.append("PandaData authentication unavailable")
+        else:
+            try:
+                panda_data.init_token(
+                    username=CONFIG.panda_username,
+                    password=CONFIG.panda_password,
+                    base_url=CONFIG.panda_base_url,
+                )
+                authenticated = True
+            except Exception:
+                warnings.append("PandaData authentication unavailable")
+
+    if authenticated:
+        for name, method_name, params in missing:
+            try:
+                frame = getattr(panda_data, method_name)(**params)
+                if frame is None or len(frame) == 0:
+                    warnings.append(f"{name} returned no rows")
+                    continue
+                normalized = normalize_frame(frame)
+                if len(normalized) == 0:
+                    warnings.append(f"{name} returned no rows")
+                    continue
+                datasets[name] = cache.save(
+                    name,
+                    method_name,
+                    params,
+                    sdk_version,
+                    normalized,
+                )
+            except Exception:
+                warnings.append(f"{name} request failed")
 
     if "daily" not in datasets:
-        return MarketDataBundle.insufficient(
-            request.symbol,
-            "daily dataset unavailable",
+        return MarketDataBundle(
+            symbol=request.symbol,
+            status="insufficient-evidence",
+            mode="cache" if datasets else "live",
+            datasets=datasets,
+            warnings=[*warnings, "daily dataset unavailable"],
         )
     mode = (
         "live"
