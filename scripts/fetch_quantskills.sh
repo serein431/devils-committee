@@ -10,26 +10,29 @@ mkdir -p "$DEST"
 
 REPOS=(
   skill-pandadata-api
-  skill-factor-ranking-sage
-  skill-residual-guided-factor-selection
-  skill-us-sector-rotation
-  skill-portfolio-liquidity-stress-test
-  skill-index-rebalance-event-study
-  skill-holder-structure-scan
-  skill-dalio-all-weather
-  skill-templeton-global-contrarian
   skill-corporate-action-adjustment-auditor
   skill-survivorship-universe-auditor
-  skill-intraday-data-quality-auditor
+  skill-portfolio-liquidity-stress-test
+  skill-index-rebalance-event-study
+  skill-factor-ranking-sage
   skill-model-hpo-evidence-driven
 )
 
+failed=0
 for r in "${REPOS[@]}"; do
   if [ -d "$DEST/$r/.git" ]; then
-    echo "↻ $r (pull)"; git -C "$DEST/$r" pull --quiet || true
+    echo "↻ $r (pull)"
+    if ! git -C "$DEST/$r" pull --quiet; then
+      echo "! $r update failed" >&2
+      failed=1
+    fi
   else
-    echo "⬇ $r"; git clone --quiet "https://github.com/quantskills/$r.git" "$DEST/$r" || \
-      echo "  (clone failed — repo may be private/renamed; confirm in Feishu)"
+    echo "⬇ $r"
+    if ! git clone --quiet "https://github.com/quantskills/$r.git" "$DEST/$r"; then
+      echo "! $r clone failed" >&2
+      failed=1
+    fi
   fi
 done
 echo "done -> $DEST"
+exit "$failed"
