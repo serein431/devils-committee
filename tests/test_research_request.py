@@ -20,6 +20,14 @@ def test_text_symbol_does_not_match_inside_longer_identifier():
     assert symbol_from_text("研究 abcSH600519.SZdef") == ("UNKNOWN", "unknown")
 
 
+def test_text_symbol_rejects_invalid_suffix_continuation():
+    assert symbol_from_text("研究 SH600519.SZX") == ("UNKNOWN", "unknown")
+
+
+def test_text_symbol_rejects_non_a_share_exchange_suffix():
+    assert symbol_from_text("研究 600519.HK") == ("UNKNOWN", "unknown")
+
+
 def test_payload_fields_override_text_defaults():
     req = ResearchRequest.from_payload({
         "topic": "分析 600519",

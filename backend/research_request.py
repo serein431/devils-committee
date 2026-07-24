@@ -22,7 +22,7 @@ def normalize_symbol(value: str) -> tuple[str, str]:
 
 def symbol_from_text(text: str) -> tuple[str, str]:
     match = re.search(
-        r"(?i)(?<!\w)(?:sh|sz)?\d{6}(?:\.(?:sh|sz))?(?!\w)",
+        r"(?i)(?<!\w)(?:sh|sz)?\d{6}(?:\.[A-Za-z0-9_]+)?(?!\w|\.[A-Za-z0-9_])",
         text,
     )
     if match:
