@@ -42,7 +42,7 @@ class MockLLM:
                 bits.append(f"{e['summary']}（{kv}）")
             else:
                 bits.append(e["summary"])
-        joined = "；".join(bits) if bits else "暂无量化证据"
+        joined = "；".join(bits) if bits else "没有可解释的 Skill 结果"
         # Distinct voice per side so even offline the six agents sound like people,
         # not one template. (Real openai mode gets these voices via system prompts.)
         if side == "bull":
@@ -56,22 +56,23 @@ class MockLLM:
         return f"{symbol}：{joined}。"
 
     def audit_reason(self, *, status: str, symbol: str, detail: dict[str, Any]) -> str:
-        # The 阴阳怪气 devil's-advocate voice — never nasty, always specific,
-        # and it refuses to call missing evidence a "pass".
+        findings = [
+            str(item.get("claim"))
+            for item in detail.get("findings", [])
+            if isinstance(item, dict) and item.get("claim")
+        ]
+        warnings = [str(item) for item in detail.get("warnings", []) if item]
+        explanation = "；".join(findings or warnings)
         if status == "pass":
-            return "我尽力挑刺了：证据链闭合，抽样、复权、调参都查过，这条我挑不出毛病，放行。"
+            return "现有审计结果没有指出可发布的问题。"
         if status == "selection_bias":
-            issues = "；".join(detail.get("proven_issues", [])) or "存在选择/存活偏差迹象"
-            return f"打住——这条我得标红（选择偏差）：{issues} 挑赢家不算赢。"
+            return f"选择偏差审计有发现：{explanation or '请查看对应 Skill 结果。'}"
         if status == "bad_data":
-            defects = "；".join(detail.get("defects", [])) or "数据存在缺陷"
-            return f"证据本身就带病（坏数据）：{defects} 结论再漂亮也是建在流沙上。"
+            return f"数据审计有发现：{explanation or '请查看对应 Skill 结果。'}"
         if status == "suspected_overfit":
-            sig = "；".join(detail.get("overfit_signals", [])) or "疑似过拟合"
-            return f"这不叫规律，这叫背答案（过拟合）：{sig} 拿去样本外再跑一遍我们再谈。"
+            return f"调参审计有发现：{explanation or '请查看对应 Skill 结果。'}"
         if status == "thin_data":
-            miss = "；".join(detail.get("missing_evidence", [])) or "证据不足"
-            return f"我不会替它圆场：证据就是不够（≠通过）：{miss} 缺证据就是缺证据。"
+            return f"证据不足：{explanation or '对应 Skill 没有足够结果。'}"
         return "审计：状态未知。"
 
     def chair_line(self, *, symbol: str, kind: str, payload: Any) -> str:
@@ -111,17 +112,20 @@ class OpenAICompatLLM:
             choices = (r.json() or {}).get("choices") or []
             content = choices[0].get("message", {}).get("content") if choices else None
             if not content:
-                raise ValueError(f"empty/malformed LLM response: {str(r.json())[:120]}")
+                raise ValueError("empty or malformed LLM response")
             return content
-        except Exception as e:
-            logging.getLogger("devils-committee").warning("LLM call failed: %s", str(e)[:160])
-            return "（本段由模型生成，暂不可用；请以下方证据与审计结论为准。）"
+        except Exception as exc:
+            logging.getLogger("devils-committee").warning(
+                "LLM call failed: %s",
+                type(exc).__name__,
+            )
+            return "（模型说明暂不可用；请直接查看下方 Skill 结果、数据来源和风险提示。）"
 
     def argue(self, *, side: str, symbol: str, evidence: list[dict[str, Any]]) -> str:
         p = PERSONAS[side]
         system = (
             f"你是投资辩论庭中的「{p['name']}」。风格：{p['voice']}。"
-            "只基于给定的量化证据说话，每条论点都要引用证据里的技能与数字。"
+            "只解释给定的 Skill 结果。不得补写未提供的指标、来源或 Skill 调用。"
             "严禁给出买入/卖出/目标价/收益承诺；你是在帮小白理解，不是荐股。"
             "用简体中文，3~5 句，口语但有据。"
         )

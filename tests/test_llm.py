@@ -5,8 +5,6 @@ temperature, persona system prompt, and the evidence JSON — is assembled right
 and that get_llm() switches modes correctly. When the Feishu key lands, these
 lock down that only the transport changes, not the contract."""
 import dataclasses
-import json
-
 from backend import llm
 
 
@@ -38,7 +36,12 @@ def _openai_without_network():
     return obj
 
 
-def test_argue_builds_persona_system_and_evidence_user():
+def test_argue_builds_persona_system_and_evidence_user(monkeypatch):
+    monkeypatch.setattr(
+        llm,
+        "CONFIG",
+        dataclasses.replace(llm.CONFIG, llm_model="test-model"),
+    )
     o = _openai_without_network()
     evidence = [{"skill": "skill-factor-ranking-sage", "summary": "正向排序",
                  "metrics": {"ic": 0.04}}]
@@ -46,8 +49,8 @@ def test_argue_builds_persona_system_and_evidence_user():
     assert out == "MOCKED_REPLY"
     url, body = o._client.calls[0]
     assert url == "/chat/completions"
-    assert body["model"] == "deepseek-chat"      # default; overridden by env in real use
-    assert body["temperature"] == 0.6
+    assert body["model"] == "test-model"
+    assert body["temperature"] == llm.CONFIG.llm_temperature
     system, user = body["messages"][0]["content"], body["messages"][1]["content"]
     assert llm.PERSONAS["bull"]["name"] in system
     assert "买入" in system or "荐股" in system    # persona forbids buy/sell advice
@@ -124,6 +127,14 @@ def test_llm_degrades_on_malformed_responses():
         o = _llm_with(resp)
         out = o.argue(side="bull", symbol="AAPL", evidence=[])
         assert isinstance(out, str) and out                 # got a placeholder, no crash
+
+
+def test_llm_failure_returns_structured_fallback_without_fake_numbers():
+    o = _llm_with(_ErrResp({}, raises=True))
+    text = o.argue(side="bull", symbol="600519.SH", evidence=[])
+
+    assert "模型说明暂不可用" in text
+    assert not any(ch.isdigit() for ch in text)
 
 
 def test_mock_and_openai_share_the_same_method_surface():

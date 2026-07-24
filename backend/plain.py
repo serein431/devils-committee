@@ -18,7 +18,7 @@ PLAIN_CLAIM = {
 
 # Beginner analogy per audit verdict — this is where '教你当裁判' happens.
 PLAIN_AUDIT = {
-    "pass": "这条经得起查：数据、抽样、调参都对得上，暂时挑不出毛病。",
+    "pass": "现有审计结果没有指出问题，但这不代表以后不会出现风险。",
     "selection_bias": "小心：这像“只把考了高分的同学拿出来吹，输的都不提”——样本被挑过了，"
                       "看起来的规律可能是假的。",
     "bad_data": "小心：这条用的价格数据本身有问题（好比体重秤没归零就称），"

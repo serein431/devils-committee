@@ -7,7 +7,10 @@ Shapes deliberately mirror the REAL QuantSkills contracts we verified on
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from .skills.contracts import SkillResult
 
 Side = Literal["bull", "bear", "macro", "risk"]
 AuditStatus = Literal[
@@ -19,16 +22,80 @@ AuditStatus = Literal[
 ]
 
 
-@dataclass
+@dataclass(init=False)
 class Evidence:
-    """One piece of grounding behind a claim: which skill produced it + the numbers."""
-    skill: str                       # e.g. "skill-factor-ranking-sage"
-    summary: str                     # human-readable one-liner
-    data_ref: str = ""               # e.g. "600519.SH 2019-01..2025-06 (cached)"
-    metrics: dict[str, Any] = field(default_factory=dict)  # e.g. {"ic": 0.041, "n": 1180}
+    """A claim-sized view of one real QuantSkill result."""
+
+    skill_id: str
+    summary: str
+    status: str
+    mode: str
+    dataset_hashes: list[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    assumptions: list[str] = field(default_factory=list)
+
+    def __init__(
+        self,
+        skill_id: str | None = None,
+        summary: str = "",
+        status: str = "success",
+        mode: str = "mock",
+        dataset_hashes: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+        metrics: dict[str, Any] | None = None,
+        assumptions: list[str] | None = None,
+        *,
+        skill: str | None = None,
+    ) -> None:
+        """Accept the former ``skill=`` name while exposing ``skill_id``."""
+
+        if skill_id and skill and skill_id != skill:
+            raise ValueError("skill_id and skill must match")
+        resolved_skill = skill_id or skill
+        if not resolved_skill:
+            raise TypeError("skill_id is required")
+        self.skill_id = resolved_skill
+        self.summary = summary
+        self.status = status
+        self.mode = mode
+        self.dataset_hashes = list(dataset_hashes or [])
+        self.evidence_refs = list(evidence_refs or [])
+        self.metrics = dict(metrics or {})
+        self.assumptions = list(assumptions or [])
+
+    @property
+    def skill(self) -> str:
+        return self.skill_id
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["skill"] = self.skill_id
+        return payload
+
+
+def evidence_from_result(result: SkillResult) -> Evidence:
+    """Project a SkillResult without adding claims, metrics or sources."""
+
+    summaries = [item.claim for item in result.findings]
+    summary = "；".join(summaries[:2]) or "该项没有可发布的结论"
+    refs = sorted(
+        {
+            ref
+            for item in result.findings
+            for ref in item.evidence_refs
+        }
+    )
+    return Evidence(
+        skill_id=result.skill_id,
+        summary=summary,
+        status=result.status,
+        mode=result.mode,
+        dataset_hashes=list(result.dataset_hashes),
+        evidence_refs=refs,
+        metrics=dict(result.metrics),
+        assumptions=list(result.assumptions),
+    )
 
 
 @dataclass
