@@ -1,0 +1,670 @@
+"""Adapters for the four QuantSkills that run for every research request."""
+
+from __future__ import annotations
+
+import asyncio
+import csv
+import math
+import os
+import tempfile
+import time
+from typing import Any, Callable
+
+from ..config import CONFIG
+from ..research_request import ResearchRequest
+from . import cli
+from .contracts import MarketDataBundle, SkillFinding, SkillResult
+
+
+ONLINE_SKILLS: dict[str, tuple[str, list[str]]] = {
+    "skill-corporate-action-adjustment-auditor": (
+        "audit_adjustments.py",
+        ["--return-tolerance", "0.02", "--jump-threshold", "0.21"],
+    ),
+    "skill-survivorship-universe-auditor": ("audit_universe.py", []),
+    "skill-portfolio-liquidity-stress-test": (
+        "stress_liquidity.py",
+        [
+            "--participation",
+            "0.1",
+            "--volume-shock",
+            "0.5",
+            "--horizon-days",
+            "5",
+            "--eta",
+            "0.5",
+        ],
+    ),
+    "skill-index-rebalance-event-study": (
+        "study_index_rebalance.py",
+        ["--start", "-5", "--end", "5"],
+    ),
+}
+
+ADJUSTMENT_COLUMNS = [
+    "symbol",
+    "date",
+    "close",
+    "adj_close",
+    "split_factor",
+    "cash_dividend",
+]
+UNIVERSE_COLUMNS = [
+    "symbol",
+    "date",
+    "listed_at",
+    "delisted_at",
+    "return",
+    "delisting_return",
+    "eligible",
+]
+LIQUIDITY_COLUMNS = [
+    "symbol",
+    "position_value",
+    "adv",
+    "spread_bps",
+    "volatility",
+]
+EVENT_COLUMNS = [
+    "event_id",
+    "symbol",
+    "action",
+    "announcement_date",
+    "effective_date",
+    "relative_day",
+    "return",
+    "benchmark_return",
+    "volume_ratio",
+    "weight_before",
+    "weight_after",
+]
+
+
+def report_to_result(
+    skill_id: str,
+    report: dict[str, Any],
+    mode: str,
+    duration_ms: int,
+    dataset_hashes: list[str],
+    assumptions: list[str] | None = None,
+    forced_warning: str = "",
+) -> SkillResult:
+    """Convert a QuantSkills report without turning missing evidence into success."""
+    raw_status = report.get("status")
+    if raw_status == "insufficient-evidence" or forced_warning:
+        status = "insufficient-evidence"
+    elif raw_status in {"pass", "fail", "warning"}:
+        status = "success"
+    else:
+        status = "error"
+
+    findings: list[SkillFinding] = []
+    for item in report.get("findings", []) or []:
+        if not isinstance(item, dict):
+            continue
+        evidence = item.get("evidence", {})
+        if not isinstance(evidence, dict):
+            evidence = {}
+        reasons = evidence.get("reasons", [])
+        if isinstance(reasons, list):
+            reason_text = ", ".join(str(reason) for reason in reasons)
+        else:
+            reason_text = str(reasons) if reasons else ""
+        claim = item.get("impact") or reason_text or "QuantSkills finding"
+        refs = [
+            str(value)
+            for value in evidence.values()
+            if isinstance(value, str) and value
+        ]
+        findings.append(SkillFinding(str(claim), refs[:5], 0.8))
+
+    warnings = [str(item) for item in report.get("limitations", []) or []]
+    if forced_warning:
+        warnings.append(forced_warning)
+    metrics = report.get("metrics") or report.get("input_summary") or {}
+    return SkillResult(
+        skill_id=skill_id,
+        mode=mode,  # type: ignore[arg-type]
+        status=status,
+        duration_ms=duration_ms,
+        dataset_hashes=sorted(set(dataset_hashes)),
+        assumptions=list(assumptions or []),
+        metrics=dict(metrics) if isinstance(metrics, dict) else {},
+        findings=findings,
+        warnings=warnings,
+    )
+
+
+def liquidity_parameters(
+    request: ResearchRequest,
+    avg_amount: float,
+) -> tuple[dict[str, float], list[str]]:
+    assumptions: list[str] = []
+    position_value = request.portfolio_value
+    if position_value is None:
+        position_value = 100000.0
+        assumptions.append("position_value=100000 CNY demo assumption")
+    spread_bps = request.spread_bps
+    if spread_bps is None:
+        spread_bps = 10.0
+        assumptions.append("spread_bps=10 demo assumption")
+    return {
+        "position_value": float(position_value),
+        "adv": float(avg_amount),
+        "spread_bps": float(spread_bps),
+    }, assumptions
+
+
+def error_result(
+    skill_id: str,
+    bundle: MarketDataBundle,
+    warning: str,
+) -> SkillResult:
+    return SkillResult(
+        skill_id=skill_id,
+        mode=bundle.mode,
+        status="error",
+        duration_ms=0,
+        dataset_hashes=bundle.dataset_hashes,
+        warnings=[warning],
+    )
+
+
+def _read_records(bundle: MarketDataBundle, name: str) -> list[dict[str, Any]]:
+    artifact = bundle.datasets.get(name)
+    if artifact is None:
+        raise ValueError(f"{name} dataset unavailable")
+    if artifact.path.startswith("memory://"):
+        raise ValueError(f"{name} dataset unreadable")
+    try:
+        import pandas as pd  # type: ignore
+
+        frame = pd.read_parquet(artifact.path)
+        return [dict(row) for row in frame.to_dict(orient="records")]
+    except Exception:
+        raise ValueError(f"{name} dataset unreadable") from None
+
+
+def _first(row: dict[str, Any], *names: str, default: Any = "") -> Any:
+    for name in names:
+        value = row.get(name)
+        if value is not None and value != "":
+            return value
+    return default
+
+
+def _date_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 10 and raw[4] in "-/" and raw[7] in "-/":
+        return f"{raw[:4]}{raw[5:7]}{raw[8:10]}"
+    return raw[:8]
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _dates(rows: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        {
+            _date_key(_first(row, "date", "trade_date", "effective_date"))
+            for row in rows
+            if _first(row, "date", "trade_date", "effective_date")
+        }
+    )
+
+
+def _returns_by_date(rows: list[dict[str, Any]]) -> dict[str, float]:
+    ordered = sorted(
+        (
+            _date_key(_first(row, "date", "trade_date")),
+            _number(_first(row, "close", "close_price", "adj_close"), float("nan")),
+        )
+        for row in rows
+        if _first(row, "date", "trade_date")
+    )
+    returns: dict[str, float] = {}
+    previous: float | None = None
+    for date, close in ordered:
+        if previous is not None and previous != 0 and math.isfinite(close):
+            returns[date] = close / previous - 1.0
+        previous = close
+    return returns
+
+
+def _adjustment_rows(
+    request: ResearchRequest,
+    bundle: MarketDataBundle,
+) -> tuple[list[dict[str, Any]], str]:
+    daily = _read_records(bundle, "daily")
+    adjusted = _read_records(bundle, "daily_post")
+    factors = _read_records(bundle, "adj_factor")
+    dividend = (
+        _read_records(bundle, "dividend")
+        if "dividend" in bundle.datasets
+        else []
+    )
+    raw_by_date = {
+        _date_key(_first(row, "date", "trade_date")): _number(
+            _first(row, "close", "close_price")
+        )
+        for row in daily
+    }
+    adjusted_by_date = {
+        _date_key(_first(row, "date", "trade_date")): _number(
+            _first(row, "close", "adj_close", "close_price")
+        )
+        for row in adjusted
+    }
+    factor_by_date = {
+        _date_key(_first(row, "date", "trade_date")): _number(
+            _first(row, "adj_factor", "factor", "split_factor"),
+            1.0,
+        )
+        for row in factors
+    }
+    cash_names = (
+        "cash_dividend",
+        "cash_amount",
+        "dividend_amount",
+        "cash_dividend_amount",
+    )
+    cash_available = any(
+        any(name in row and row[name] not in (None, "") for name in cash_names)
+        for row in dividend
+    )
+    cash_by_date = {
+        _date_key(
+            _first(
+                row,
+                "date",
+                "ex_date",
+                "ex_dividend_date",
+                "record_date",
+            )
+        ): _number(_first(row, *cash_names))
+        for row in dividend
+        if _first(
+            row,
+            "date",
+            "ex_date",
+            "ex_dividend_date",
+            "record_date",
+        )
+    }
+    rows = [
+        {
+            "symbol": request.symbol,
+            "date": date,
+            "close": raw_by_date[date],
+            "adj_close": adjusted_by_date.get(date, raw_by_date[date]),
+            "split_factor": factor_by_date.get(date, 1.0),
+            "cash_dividend": cash_by_date.get(date, 0.0),
+        }
+        for date in sorted(raw_by_date)
+    ]
+    warning = "" if cash_available else "cash_dividend amount unavailable"
+    return rows, warning
+
+
+def _universe_rows(
+    request: ResearchRequest,
+    bundle: MarketDataBundle,
+) -> tuple[list[dict[str, Any]], str]:
+    start_rows = _read_records(bundle, "trade_list_start")
+    end_rows = _read_records(bundle, "trade_list_end")
+    status_rows = _read_records(bundle, "status_change")
+    start_by_symbol = {
+        str(_first(row, "symbol", "stock_symbol", "code")): row
+        for row in start_rows
+        if _first(row, "symbol", "stock_symbol", "code")
+    }
+    end_by_symbol = {
+        str(_first(row, "symbol", "stock_symbol", "code")): row
+        for row in end_rows
+        if _first(row, "symbol", "stock_symbol", "code")
+    }
+    status_by_symbol: dict[str, dict[str, Any]] = {}
+    delisting_return_available = False
+    for row in status_rows:
+        symbol = str(_first(row, "symbol", "stock_symbol", "code"))
+        if not symbol:
+            continue
+        current = status_by_symbol.setdefault(symbol, {})
+        for target, aliases in (
+            ("listed_at", ("listed_at", "list_date", "listing_date")),
+            ("delisted_at", ("delisted_at", "delist_date", "delisting_date")),
+            ("return", ("return", "period_return")),
+            ("delisting_return", ("delisting_return",)),
+        ):
+            value = _first(row, *aliases)
+            if value not in (None, ""):
+                current[target] = value
+                if target == "delisting_return":
+                    delisting_return_available = True
+    output: list[dict[str, Any]] = []
+    symbols = sorted(set(start_by_symbol) | set(end_by_symbol) | set(status_by_symbol))
+    for date, members in (
+        (request.start_date, start_by_symbol),
+        (request.end_date, end_by_symbol),
+    ):
+        for symbol in symbols:
+            row = members.get(symbol, {})
+            status = status_by_symbol.get(symbol, {})
+            output.append(
+                {
+                    "symbol": symbol,
+                    "date": date,
+                    "listed_at": _first(
+                        status, "listed_at", "list_date", "listing_date"
+                    ),
+                    "delisted_at": _first(
+                        status, "delisted_at", "delist_date", "delisting_date"
+                    ),
+                    "return": _first(
+                        row,
+                        "return",
+                        "period_return",
+                        default=status.get("return", ""),
+                    ),
+                    "delisting_return": status.get("delisting_return", ""),
+                    "eligible": 1 if symbol in members else 0,
+                }
+            )
+    if not output:
+        output.append(
+            {
+                "symbol": request.symbol,
+                "date": request.end_date,
+                "listed_at": "",
+                "delisted_at": "",
+                "return": "",
+                "delisting_return": "",
+                "eligible": 1,
+            }
+        )
+    warning = "" if delisting_return_available else "delisting_return unavailable"
+    return output, warning
+
+
+def _liquidity_rows(
+    request: ResearchRequest,
+    bundle: MarketDataBundle,
+) -> tuple[list[dict[str, Any]], list[str], str]:
+    daily = _read_records(bundle, "daily")
+    amounts = [
+        _number(
+            _first(
+                row,
+                "amount",
+                "turnover_amount",
+                "trade_amount",
+                "trading_value",
+            )
+        )
+        for row in daily
+    ]
+    amounts = [amount for amount in amounts if amount > 0]
+    avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
+    params, assumptions = liquidity_parameters(request, avg_amount)
+    returns = list(_returns_by_date(daily).values())
+    if len(returns) > 1:
+        mean = sum(returns) / len(returns)
+        variance = sum((item - mean) ** 2 for item in returns) / (len(returns) - 1)
+        volatility = math.sqrt(variance) * math.sqrt(252)
+    else:
+        volatility = 0.0
+    warning = "" if amounts else "average traded amount unavailable"
+    return (
+        [{"symbol": request.symbol, **params, "volatility": volatility}],
+        assumptions,
+        warning,
+    )
+
+
+def _event_rows(
+    request: ResearchRequest,
+    bundle: MarketDataBundle,
+) -> tuple[list[dict[str, Any]], str]:
+    weights = _read_records(bundle, "index_weights")
+    stock = _read_records(bundle, "daily")
+    benchmark = _read_records(bundle, "index_daily")
+    stock_returns = _returns_by_date(stock)
+    benchmark_returns = _returns_by_date(benchmark)
+    stock_volume = {
+        _date_key(_first(row, "date", "trade_date")): _number(
+            _first(row, "volume", "vol", "turnover_volume")
+        )
+        for row in stock
+    }
+    event_rows: list[dict[str, Any]] = []
+    ordered_weights = sorted(
+        weights,
+        key=lambda row: str(_first(row, "date", "effective_date", "trade_date")),
+    )
+    previous_weight = 0.0
+    event_count = 0
+    trading_dates = _dates(stock)
+    announcement_incomplete = False
+    for row in ordered_weights:
+        effective_date = _date_key(
+            _first(row, "effective_date", "date", "trade_date")
+        )
+        before = _number(_first(row, "weight_before"), previous_weight)
+        current_weight = _number(
+            _first(row, "weight_after", "weight", "index_weight")
+        )
+        if not effective_date or current_weight == before:
+            previous_weight = current_weight
+            continue
+        event_count += 1
+        event_id = str(_first(row, "event_id", default=f"event-{event_count}"))
+        try:
+            event_index = trading_dates.index(effective_date)
+        except ValueError:
+            previous_weight = current_weight
+            continue
+        announcement_date = _date_key(_first(row, "announcement_date"))
+        if not announcement_date:
+            announcement_incomplete = True
+        for offset in range(-5, 6):
+            date_index = event_index + offset
+            if not 0 <= date_index < len(trading_dates):
+                continue
+            date = trading_dates[date_index]
+            baseline = [value for value in stock_volume.values() if value > 0]
+            average_volume = sum(baseline) / len(baseline) if baseline else 0.0
+            volume_ratio = (
+                stock_volume.get(date, 0.0) / average_volume
+                if average_volume > 0
+                else 0.0
+            )
+            event_rows.append(
+                {
+                    "event_id": event_id,
+                    "symbol": request.symbol,
+                    "action": _first(
+                        row,
+                        "action",
+                        "change_type",
+                        default="add" if current_weight > before else "remove",
+                    ),
+                    "announcement_date": announcement_date,
+                    "effective_date": effective_date,
+                    "relative_day": offset,
+                    "return": stock_returns.get(date, ""),
+                    "benchmark_return": benchmark_returns.get(date, ""),
+                    "volume_ratio": volume_ratio,
+                    "weight_before": before,
+                    "weight_after": current_weight,
+                }
+            )
+        previous_weight = current_weight
+    warning = (
+        "announcement_date unavailable; event timing incomplete"
+        if announcement_incomplete
+        else ""
+    )
+    return event_rows, warning
+
+
+class OnlineSkillRunner:
+    def __init__(self, timeout_sec: float = 120) -> None:
+        self.timeout_sec = min(float(timeout_sec), 120.0)
+
+    def _invoke(
+        self,
+        skill_id: str,
+        entry: str,
+        rows: list[dict[str, Any]],
+        columns: list[str],
+        extra_args: list[str],
+    ) -> tuple[dict[str, Any], int]:
+        skill_dir = os.path.join(CONFIG.quantskills_dir, skill_id)
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = os.path.join(temp_dir, "input.csv")
+            output_path = os.path.join(temp_dir, "output.json")
+            with open(input_path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns)
+                writer.writeheader()
+                writer.writerows(rows)
+            report = cli.invoke(
+                skill_dir,
+                entry,
+                ["--input", input_path, "--out", output_path, *extra_args],
+                timeout=max(1, int(math.ceil(self.timeout_sec))),
+            )
+        return report, round((time.monotonic() - started) * 1000)
+
+    def _run(
+        self,
+        skill_id: str,
+        bundle: MarketDataBundle,
+        rows: list[dict[str, Any]],
+        columns: list[str],
+        assumptions: list[str] | None = None,
+        forced_warning: str = "",
+    ) -> SkillResult:
+        if not rows:
+            return SkillResult(
+                skill_id=skill_id,
+                mode=bundle.mode,
+                status="insufficient-evidence",
+                duration_ms=0,
+                dataset_hashes=bundle.dataset_hashes,
+                assumptions=list(assumptions or []),
+                warnings=[forced_warning or "skill input unavailable"],
+            )
+        entry, extra_args = ONLINE_SKILLS[skill_id]
+        report, duration_ms = self._invoke(
+            skill_id, entry, rows, columns, extra_args
+        )
+        return report_to_result(
+            skill_id,
+            report,
+            bundle.mode,
+            duration_ms,
+            bundle.dataset_hashes,
+            assumptions=assumptions,
+            forced_warning=forced_warning,
+        )
+
+    def run_adjustments(
+        self, request: ResearchRequest, bundle: MarketDataBundle
+    ) -> SkillResult:
+        rows, warning = _adjustment_rows(request, bundle)
+        return self._run(
+            "skill-corporate-action-adjustment-auditor",
+            bundle,
+            rows,
+            ADJUSTMENT_COLUMNS,
+            forced_warning=warning,
+        )
+
+    def run_survivorship(
+        self, request: ResearchRequest, bundle: MarketDataBundle
+    ) -> SkillResult:
+        rows, warning = _universe_rows(request, bundle)
+        return self._run(
+            "skill-survivorship-universe-auditor",
+            bundle,
+            rows,
+            UNIVERSE_COLUMNS,
+            forced_warning=warning,
+        )
+
+    def run_liquidity(
+        self, request: ResearchRequest, bundle: MarketDataBundle
+    ) -> SkillResult:
+        rows, assumptions, warning = _liquidity_rows(request, bundle)
+        return self._run(
+            "skill-portfolio-liquidity-stress-test",
+            bundle,
+            rows,
+            LIQUIDITY_COLUMNS,
+            assumptions=assumptions,
+            forced_warning=warning,
+        )
+
+    def run_index_event(
+        self, request: ResearchRequest, bundle: MarketDataBundle
+    ) -> SkillResult:
+        rows, warning = _event_rows(request, bundle)
+        return self._run(
+            "skill-index-rebalance-event-study",
+            bundle,
+            rows,
+            EVENT_COLUMNS,
+            forced_warning=warning,
+        )
+
+    async def run_all(
+        self,
+        request: ResearchRequest,
+        bundle: MarketDataBundle,
+    ) -> list[SkillResult]:
+        calls: list[
+            tuple[str, Callable[[ResearchRequest, MarketDataBundle], SkillResult]]
+        ] = [
+            (
+                "skill-corporate-action-adjustment-auditor",
+                self.run_adjustments,
+            ),
+            (
+                "skill-survivorship-universe-auditor",
+                self.run_survivorship,
+            ),
+            (
+                "skill-portfolio-liquidity-stress-test",
+                self.run_liquidity,
+            ),
+            (
+                "skill-index-rebalance-event-study",
+                self.run_index_event,
+            ),
+        ]
+
+        async def one(
+            skill_id: str,
+            call: Callable[[ResearchRequest, MarketDataBundle], SkillResult],
+        ) -> SkillResult:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(call, request, bundle),
+                    timeout=self.timeout_sec,
+                )
+            except asyncio.TimeoutError:
+                return error_result(skill_id, bundle, "skill timed out")
+            except Exception:
+                return error_result(skill_id, bundle, "skill execution failed")
+
+        return list(
+            await asyncio.gather(
+                *(one(skill_id, call) for skill_id, call in calls)
+            )
+        )

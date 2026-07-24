@@ -14,17 +14,44 @@ not random, so the same topic always produces the same teaching moment.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from ..config import CONFIG
+from ..research_request import ResearchRequest
 from . import contracts
+from .contracts import MarketDataBundle, SkillResult
 from .data import get_stock_daily, DailyBars, stable_seed
+from .online import ONLINE_SKILLS, OnlineSkillRunner
+from .panda import build_market_data_bundle
+
+
+@dataclass
+class ResearchEvidence:
+    request: ResearchRequest
+    bundle: MarketDataBundle
+    results: dict[str, SkillResult]
 
 
 class SkillRunner:
     def __init__(self) -> None:
         self._bars_cache: dict[str, DailyBars] = {}
+
+    async def prepare(self, request: ResearchRequest) -> ResearchEvidence:
+        """Fetch one shared data bundle and run every online skill against it."""
+        bundle = await asyncio.to_thread(build_market_data_bundle, request)
+        if bundle.status != "success":
+            return ResearchEvidence(request, bundle, {})
+        online = await OnlineSkillRunner(CONFIG.skill_timeout_sec).run_all(
+            request, bundle
+        )
+        return ResearchEvidence(
+            request,
+            bundle,
+            {item.skill_id: item for item in online},
+        )
 
     # -- data -----------------------------------------------------------------
     def bars(self, symbol: str) -> DailyBars:
@@ -126,7 +153,12 @@ class SkillRunner:
             with open(in_csv, "w", newline="", encoding="utf-8") as fh:
                 w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
                 w.writeheader(); w.writerows(rows)
-            real = cli.invoke(skill_dir, ["--input", in_csv, "--out", out_json])
+            real = cli.invoke(
+                skill_dir,
+                "audit_universe.py",
+                ["--input", in_csv, "--out", out_json],
+                timeout=CONFIG.skill_timeout_sec,
+            )
         vf = cli.to_verdict_fields(real)
         proven = [vf["reason"]] if vf["status"] in ("selection_bias", "bad_data",
                                                     "suspected_overfit") else []
@@ -187,8 +219,15 @@ class SkillRunner:
             # 0.21: above BOTH the main-board ±10% and ChiNext/STAR ±20% daily limits,
             # so legitimate limit days are never false-flagged; only genuine unadjusted
             # corporate-action gaps (splits / 送转 / large special dividends) surface.
-            real = cli.invoke(skill_dir, ["--input", in_csv, "--out", out_json,
-                                          "--jump-threshold", "0.21"])
+            real = cli.invoke(
+                skill_dir,
+                "audit_adjustments.py",
+                [
+                    "--input", in_csv, "--out", out_json,
+                    "--jump-threshold", "0.21",
+                ],
+                timeout=CONFIG.skill_timeout_sec,
+            )
         vf = cli.to_verdict_fields(real)
         defects = [vf["reason"]] if vf["status"] != "pass" and real.get("findings") else []
         out = contracts.data_quality_audit(symbol, defects)
@@ -251,5 +290,17 @@ class SkillRunner:
                     w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
                     w.writeheader()
                     w.writerows(rows)
-                return cli.invoke(skill_dir, ["--input", in_csv, "--out", out_json])
-            return cli.invoke(skill_dir, ["--demo"])   # no rows -> offline smoke
+                entry = ONLINE_SKILLS[skill][0]
+                return cli.invoke(
+                    skill_dir,
+                    entry,
+                    ["--input", in_csv, "--out", out_json],
+                    timeout=CONFIG.skill_timeout_sec,
+                )
+            entry = ONLINE_SKILLS[skill][0]
+            return cli.invoke(
+                skill_dir,
+                entry,
+                ["--demo"],
+                timeout=CONFIG.skill_timeout_sec,
+            )   # no rows -> offline smoke

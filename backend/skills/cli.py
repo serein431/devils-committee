@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 from typing import Any
@@ -31,28 +32,35 @@ _SEV_MAP = {"critical": "high", "high": "high", "medium": "medium",
             "low": "low", "info": "low", "none": "none"}
 
 
-def invoke(skill_dir: str, args: list[str], timeout: int = 180) -> dict[str, Any]:
-    """Run a cloned skill CLI and return its parsed JSON report.
-
-    args e.g. ["--demo"]  or  ["--input", csv_path, "--out", out_path].
-    Locates the single .py entry under scripts/. Raises on non-zero exit.
-    """
-    skill_dir = os.path.abspath(skill_dir)      # robust when cwd is set below
-    scripts = os.path.join(skill_dir, "scripts")
-    entry = next((f for f in sorted(os.listdir(scripts)) if f.endswith(".py")), None)
-    if entry is None:
-        raise RuntimeError(f"no CLI entry under {scripts}")
-    # Prefer explicit --out to stdout capture (some skills print progress on stdout).
-    out_path = None
-    if "--out" in args:
-        out_path = args[args.index("--out") + 1]
-    proc = subprocess.run(
-        [sys.executable, os.path.join(scripts, entry), *args],
-        cwd=skill_dir, capture_output=True, text=True, timeout=timeout)
+def invoke(
+    skill_dir: str,
+    entry: str,
+    args: list[str],
+    timeout: int = 120,
+) -> dict[str, Any]:
+    """Run one named skill entry and return its parsed JSON report."""
+    skill_dir = os.path.abspath(skill_dir)
+    script = os.path.join(skill_dir, "scripts", entry)
+    if not os.path.isfile(script):
+        raise RuntimeError("skill entry unavailable")
+    out_path = args[args.index("--out") + 1] if "--out" in args else None
+    try:
+        proc = subprocess.run(
+            [sys.executable, script, *args],
+            cwd=skill_dir,
+            capture_output=True,
+            text=True,
+            timeout=min(timeout, 120),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError("skill execution timed out") from exc
     if proc.returncode != 0:
-        raise RuntimeError(f"{entry} exited {proc.returncode}: {proc.stderr[:400]}")
-    raw = open(out_path, encoding="utf-8").read() if out_path else proc.stdout
-    return json.loads(raw)
+        raise RuntimeError("skill command failed")
+    raw = Path(out_path).read_text(encoding="utf-8") if out_path else proc.stdout
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("skill returned invalid JSON") from exc
 
 
 def to_verdict_fields(real: dict[str, Any]) -> dict[str, Any]:
