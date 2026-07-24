@@ -17,6 +17,11 @@ const { window } = dom;
 const { document } = window;
 window.requestAnimationFrame = window.requestAnimationFrame || ((cb) => cb());
 
+assert.match(html, /600519\.SH/);
+assert.match(html, /300750\.SZ/);
+assert.match(html, /601318\.SH/);
+assert.doesNotMatch(html, /AAPL|NVDA|TSLA/);
+
 let passed = 0;
 const ok = (name, cond) => { assert.ok(cond, name); console.log("  [PASS]", name); passed++; };
 
@@ -49,13 +54,13 @@ ok("audit console revealed", !document.getElementById("auditSec").className.incl
 window.handleEvent({
   stage: "audit_flag", claim_id: "bull-1", status: "selection_bias", severity: "high",
   reason: "小样本高IC，像挑赢家来吹", remediation: "改用全域", plain: "只挑高分同学",
-  provenance: "real-cli", audit_skill: "skill-survivorship-universe-auditor",
+  provenance: "live", audit_skill: "skill-survivorship-universe-auditor",
 });
 ok("flagged stamp turned red", document.getElementById("stamp-bull-1").className.includes("bad"));
 ok("flagged card got slam animation", document.getElementById("card-bull-1").className.includes("flag-slam"));
 ok("verdict row appended", document.querySelectorAll("#verdicts .vrow").length === 1);
 ok("severity ring drawn", document.querySelector("#verdicts .vrow .ring") !== null);
-ok("REAL provenance badge shown", document.querySelector("#verdicts .prov.real") !== null);
+ok("live provenance badge shown", document.querySelector("#verdicts .prov.real") !== null);
 
 // unflagged claims pass on synthesize
 window.handleEvent({ stage: "synthesize" });
@@ -70,10 +75,15 @@ window.handleEvent({
     consensus: ["都不荐股"], risk_boundaries: ["仅供学习，不构成投资建议"],
     disclaimer: "免责声明文本",
     meta: {
-      symbol: "600519.SH", n_claims: 4, n_flags: 1, audit_engine: "real-cli",
+      symbol: "600519.SH", n_claims: 4, n_flags: 1, data_status: "success",
+      audit_engine: ["live", "precomputed"],
       gives_investment_advice: false, recommendation: null,
-      modes: { llm_mode: "mock", data_mode: "mock" },
-      skills_manifest: { all_skills: ["skill-x"], data: { window: "w", source: "mock", n_bars: 250 } },
+      modes: ["live", "precomputed"],
+      skills_manifest: {
+        all_skills: ["skill-x"],
+        data: { symbol: "600519.SH", status: "success", mode: "live", dataset_hashes: ["sha256:x"] },
+        results: [{ skill_id: "skill-x", status: "success", mode: "live" }],
+      },
     },
   },
 });
@@ -82,7 +92,9 @@ ok("open disagreement marked", document.querySelector("#dmap .track.opened") !==
 ok("risk boundaries rendered", document.querySelectorAll("#bounds li").length === 1);
 ok("disclaimer shown", document.getElementById("disc").textContent.includes("免责声明"));
 ok("recommendation:none bar present", document.querySelector(".recbar .k").textContent.includes("NONE"));
-ok("audit-engine badge = real-cli", document.getElementById("bEngine").className.includes("real"));
+ok("audit-engine badge reflects real evidence", document.getElementById("bEngine").className.includes("real"));
+ok("data and skill statuses shown", document.getElementById("trace").textContent.includes("状态 success") &&
+   document.getElementById("trace").textContent.includes("skill-x[success/live]"));
 ok("map + summary sections visible", !document.getElementById("mapSec").className.includes("hidden") &&
    !document.getElementById("sumSec").className.includes("hidden"));
 
@@ -90,5 +102,23 @@ ok("map + summary sections visible", !document.getElementById("mapSec").classNam
 ok("expert mode is default (not beginner)", !document.body.classList.contains("beginner"));
 document.getElementById("mBeg").onclick();
 ok("beginner toggle works", document.body.classList.contains("beginner"));
+
+// A result without claims must be explicit evidence insufficiency, not "all pass".
+window.handleEvent({
+  stage: "result", result: {
+    claims: [], verdicts: [], open_disagreements: [], consensus: [],
+    risk_boundaries: ["当前没有足够数据"], disclaimer: "仅供研究",
+    meta: {
+      symbol: "600519.SH", n_claims: 0, n_flags: 0,
+      data_status: "insufficient-evidence", audit_engine: [], modes: [],
+      skills_manifest: {
+        all_skills: [], results: [],
+        data: { symbol: "600519.SH", status: "insufficient-evidence", mode: null, dataset_hashes: [] },
+      },
+    },
+  },
+});
+ok("zero-claim result renders safely", document.getElementById("auditSub").textContent.includes("没有可审计论据"));
+ok("zero-claim result is not called all pass", !document.getElementById("auditSub").textContent.includes("全部通过"));
 
 console.log(`\n✔ frontend DOM (quant-terminal): all ${passed} checks green`);

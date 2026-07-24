@@ -7,9 +7,8 @@
 
 跑法（在 devils-committee/ 下）：
   .venv/bin/python scripts/demo.py                      # 默认标的，真机跑
-  .venv/bin/python scripts/demo.py 600519 --pace 0.6    # 指定标的 + 放慢节奏
-  .venv/bin/python scripts/demo.py NVDA                 # 触发「过拟合→打回」剧情
-  .venv/bin/python scripts/demo.py TSLA                 # 触发「全部通过」剧情（审计不是摆设）
+  .venv/bin/python scripts/demo.py "300750.SZ 成长因子、波动、流动性和指数事件" --pace 0.6
+  .venv/bin/python scripts/demo.py "601318.SH 分红、股票池和风险证据"
 
 它调 backend.orchestration，因此 LLM/DATA/SKILL 的 mock↔real 由 .env 决定，无需改这里。
 """
@@ -52,11 +51,11 @@ async def main(topic: str, pace: float) -> None:
     async for ev in orch.stream(topic, pace=pace):
         st = ev["stage"]
         if st == "argue":
-            print("\n" + DIM("· 六个 Agent 就该标的并行取证 …"))
+            print("\n" + DIM("· 四个研究 Agent 就该标的并行取证 …"))
         elif st == "claim":
             name, color = SIDE.get(ev["side"], (ev["agent"], "36"))
             print(f"\n  {_c(color, '● ' + name)} {ev['text']}")
-            skills = "、".join(ev.get("skills", []))
+            skills = "、".join(ev.get("skills_used", []))
             if skills:
                 print("    " + DIM("↳ 证据来自 " + skills))
         elif st == "audit":
@@ -82,22 +81,26 @@ async def main(topic: str, pace: float) -> None:
             for b in r["risk_boundaries"]:
                 print("  • " + b)
             m = r["meta"]
+            modes = "/".join(m.get("modes", [])) or "unknown"
             print("\n" + DIM(f"论点 {m['n_claims']} 条 · 审计标红 {m['n_flags']} 条 · "
-                             f"用时 {r['elapsed_sec']}s · 模式 "
-                             f"{m['modes']['llm_mode']}/{m['modes']['data_mode']}"))
+                             f"用时 {r['elapsed_sec']}s · 证据模式 {modes}"))
             print(DIM("  " + r["disclaimer"]))
 
     print("\n" + BOLD("收尾一句："))
     print(BOLD("  “它没告诉你买不买。它让你") + GREEN("看懂了") + BOLD("买不买。"))
     print(BOLD("   这是我们两个 14 岁，想要的第一个理财老师。”"))
     if flagged == 0:
-        print(DIM("\n（本标的审计全部放行——审计不是摆设，它真的会分辨。换 600519 看它标红。）"))
+        print(DIM("\n（本次没有发现可证实的审计问题；请结合数据状态和证据清单理解结果。）"))
     print()
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("topic", nargs="?", default="帮我理解 600519 现在多空双方的理由和风险")
+    ap.add_argument(
+        "topic",
+        nargs="?",
+        default="研究 600519.SH 的复权、分红、因子和流动性风险",
+    )
     ap.add_argument("--pace", type=float, default=0.7, help="每步停顿秒数（现场可调）")
     args = ap.parse_args()
     asyncio.run(main(args.topic, args.pace))

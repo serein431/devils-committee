@@ -187,7 +187,7 @@
     <span class="badge" id="bSym">—</span>
     <span class="badge live" id="bLive">STANDBY</span>
     <span class="badge" id="bEngine">AUDIT: —</span>
-    <span class="badge" id="bMode">MODE: mock</span>
+    <span class="badge" id="bMode">EVIDENCE: —</span>
   </div>
 
   <div class="hero">
@@ -196,7 +196,7 @@
       它不给买卖，只摊开分歧与风险——<b>教你自己当裁判</b>。每条结论回链到真实 QuantSkills 与数据。</p>
     <div class="cmd">
       <span class="caret">&gt;</span>
-      <input id="q" placeholder="输入标的开庭，如：600519 / sh600519 / AAPL 多空双方与风险" autocomplete="off" spellcheck="false" />
+      <input id="q" placeholder="输入 A 股研究问题，如：600519.SH 的复权、分红、因子和流动性风险" autocomplete="off" spellcheck="false" />
       <button id="go">开庭 ⏎</button>
     </div>
     <div class="chips" id="chips"></div>
@@ -209,7 +209,7 @@
       <div class="pstage" data-st="synthesize"><span class="d">▮</span><span class="k">CHAIR 收敛</span></div>
     </div>
     <div class="trust">
-      <span><b>6</b> agents</span><span><b>13</b> QuantSkills</span><span><b>2</b> 真实审计器</span>
+      <span><b>6</b> agents</span><span><b>6</b> QuantSkills</span><span><b>2</b> 真实审计器</span>
       <span><b>67</b> 项测试</span><span>响应 <b>&lt;20min</b></span>
     </div>
   </div>
@@ -358,12 +358,12 @@ function renderVerdict(v,fromResult){
   if(stamp){if(v.status==="pass"){stamp.className="stamp ok";stamp.textContent="✓ 通过";}
     else{stamp.className="stamp bad";stamp.style.background=col;stamp.textContent="⚑ "+zh;}}
   if(v.status==="pass")return;
-  const real=(v.provenance==="real-cli");
+  const real=["live","cache","precomputed"].includes(v.provenance);
   const row=document.createElement("div");row.className="vrow hit";
   row.innerHTML=`${ring(sev,col)}
     <div class="vmain"><div class="vtop">
       <span class="vstatus" style="color:${col}">⚑ ${esc((SIDE[String(v.claim_id).split("-")[0]]||[""])[0]||v.claim_id)} · ${esc(en)}</span>
-      <span class="prov ${real?'real':''}">${real?'REAL · QuantSkills CLI':'启发式'}</span>
+      <span class="prov ${real?'real':''}">${real?esc(String(v.provenance).toUpperCase())+' · QuantSkills':'MOCK'}</span>
       <span class="dim" style="font-size:10px">SEV ${(v.severity||'-').toUpperCase()}</span></div>
       <div class="vreason">${esc(v.reason)}</div>
       ${v.plain?`<div class="vplain">🗣 ${esc(v.plain)}</div>`:""}
@@ -374,14 +374,29 @@ function renderVerdict(v,fromResult){
 function renderResult(r){
   document.querySelectorAll('.stamp.scan').forEach(s=>{s.className="stamp ok";s.textContent="✓ 通过";});
   const m=r.meta||{};
-  // audit verdicts that PASSED but never streamed a flag -> show a compact pass line if none flagged
-  $("#auditSub").innerHTML = flags?`发现 <b style="color:var(--crit)">${flags}</b> 处问题 · 引擎 ${esc(m.audit_engine||'mock')}`
-    :`全部通过 · 审计未挑出可证实问题（证明它会分辨，非逢多必红）`;
-  if(!flags){const row=document.createElement("div");row.className="vrow";
-    row.innerHTML=`${ring(.15,'var(--good)')}<div class="vmain"><div class="vtop">
-      <span class="vstatus" style="color:var(--good)">✓ ALL PASS</span></div>
-      <div class="vreason">四条论据都经得起独立复核——数据、抽样、复权都对得上。</div></div>`;
-    $("#verdicts").appendChild(row);}
+  const man=m.skills_manifest||{},data=man.data||{};
+  const claimCount=Number.isFinite(m.n_claims)?m.n_claims:(r.claims||[]).length;
+  const dataStatus=m.data_status||data.status||"unknown";
+  const engineModes=Array.isArray(m.audit_engine)?m.audit_engine:(m.audit_engine?[m.audit_engine]:[]);
+  const engineLabel=engineModes.join("/")||"unknown";
+  $("#auditSec").classList.remove("hidden");
+  // A zero-claim result means no audit was possible, never "all pass".
+  if(claimCount===0){
+    $("#auditSub").textContent=`没有可审计论据 · 数据状态 ${dataStatus}`;
+    const row=document.createElement("div");row.className="vrow";
+    row.innerHTML=`${ring(.6,'var(--warn)')}<div class="vmain"><div class="vtop">
+      <span class="vstatus" style="color:var(--warn)">NO CLAIMS · ${esc(dataStatus.toUpperCase())}</span></div>
+      <div class="vreason">当前数据没有形成可发布论据，请查看下方数据与技能状态。</div></div>`;
+    $("#verdicts").appendChild(row);
+  }else{
+    $("#auditSub").innerHTML = flags?`发现 <b style="color:var(--crit)">${flags}</b> 处问题 · 证据模式 ${esc(engineLabel)}`
+      :`本次未发现可证实问题 · 证据模式 ${esc(engineLabel)}`;
+    if(!flags){const row=document.createElement("div");row.className="vrow";
+      row.innerHTML=`${ring(.15,'var(--good)')}<div class="vmain"><div class="vtop">
+        <span class="vstatus" style="color:var(--good)">✓ NO VERIFIED FLAGS</span></div>
+        <div class="vreason">本次论据没有发现可证实的审计问题；这不代表标的一定可靠。</div></div>`;
+      $("#verdicts").appendChild(row);}
+  }
 
   // disagreement map (diverging)
   const dm=$("#dmap");dm.innerHTML="";
@@ -405,16 +420,18 @@ function renderResult(r){
   $("#bounds").innerHTML="";(r.risk_boundaries||[]).forEach(b=>{
     const li=document.createElement("li");li.textContent=b;$("#bounds").appendChild(li);});
   $("#disc").textContent=r.disclaimer||"";
-  const man=m.skills_manifest;
-  $("#trace").textContent=man&&man.all_skills?
-    `TRACE ▸ 数据 ${man.data.window||''}（${man.data.source}，${man.data.n_bars}bars）· QuantSkills: `+man.all_skills.join(" "):"";
+  const skillResults=Array.isArray(man.results)?man.results:[];
+  const skillTrace=skillResults.map(s=>`${s.skill_id||'?'}[${s.status||'unknown'}/${s.mode||'unknown'}]`);
+  $("#trace").textContent=`TRACE ▸ 数据 ${data.symbol||m.symbol||'—'} · 状态 ${dataStatus} · 模式 ${data.mode||'unknown'} · QuantSkills: `+
+    (skillTrace.length?skillTrace.join(" "):"无可用结果");
 
-  $("#bEngine").textContent="AUDIT: "+(m.audit_engine||"mock");
-  $("#bEngine").className="badge"+(m.audit_engine==="real-cli"?" real":"");
-  $("#bMode").textContent="MODE: "+((m.modes&&m.modes.llm_mode)||"mock")+"/"+((m.modes&&m.modes.data_mode)||"mock");
+  $("#bEngine").textContent="AUDIT: "+engineLabel;
+  $("#bEngine").className="badge"+(engineModes.some(v=>["live","cache","precomputed"].includes(v))?" real":"");
+  const modes=Array.isArray(m.modes)?m.modes:[];
+  $("#bMode").textContent="EVIDENCE: "+(modes.join("/")||data.mode||"unknown");
   $("#bLive").textContent="DONE";$("#bLive").className="badge";
   ["#mapSec","#sumSec"].forEach(s=>$(s).classList.remove("hidden"));
-  setStage("开庭结束 · 它没告诉你买不买，它让你看懂了买不买。",false);
+  setStage(claimCount===0?"研究结束 · 当前证据没有形成可发布论据。":"开庭结束 · 它没告诉你买不买，它让你看懂了买不买。",false);
 }
 
 async function run(){
@@ -449,7 +466,11 @@ function setMode(beg){document.body.classList.toggle("beginner",beg);
   $("#mBeg").classList.toggle("on",beg);$("#mExp").classList.toggle("on",!beg);}
 $("#mBeg").onclick=()=>setMode(true);$("#mExp").onclick=()=>setMode(false);setMode(false);
 
-const EX=["600519 贵州茅台 多空与风险","sh601318 中国平安 正反方","000001 平安银行","AAPL bull vs bear","NVDA 过拟合风险"];
+const EX=[
+  "600519.SH 复权、分红、因子和流动性风险",
+  "300750.SZ 成长因子、波动、流动性和指数事件",
+  "601318.SH 分红、股票池和风险证据"
+];
 const chips=$("#chips");EX.forEach(e=>{const c=document.createElement("span");c.className="chip";c.textContent=e;
   c.onclick=()=>{$("#q").value=e;run();};chips.appendChild(c);});
 $("#go").onclick=run;$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")run();});

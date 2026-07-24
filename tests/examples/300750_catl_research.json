@@ -1,10 +1,10 @@
 {
   "input": {
     "skill": "debate_case",
-    "topic": "研究 600519.SH 的复权、分红、因子和流动性风险"
+    "topic": "研究 300750.SZ 的成长因子、波动、流动性和指数事件"
   },
   "expected": {
-    "symbol": "600519.SH",
+    "symbol": "300750.SZ",
     "skill_ids": [
       "skill-corporate-action-adjustment-auditor",
       "skill-survivorship-universe-auditor",

@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Pla
 
 from .config import CONFIG
 from .orchestration import DebateOrchestrator, _extract_symbol
+from .research_request import ResearchRequest
 
 log = logging.getLogger("devils-committee")
 
@@ -34,7 +35,7 @@ if not CARD_PATH.exists():                      # card lives at repo root in thi
     CARD_PATH = ROOT.parent / "agent-card.json"
 WEB_INDEX = ROOT.parent / "web" / "index.html"
 
-app = FastAPI(title="Devil's Committee A2A", version="0.1.0")
+app = FastAPI(title="Devil's Committee A2A", version="0.2.0")
 
 
 # --- auth ------------------------------------------------------------------
@@ -44,7 +45,7 @@ def _check_auth(authorization: str | None) -> None:
     expected = f"Bearer {CONFIG.bearer_token}"
     # constant-time compare so a wrong token can't be guessed by response timing
     if not authorization or not hmac.compare_digest(authorization, expected):
-        raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+        raise HTTPException(status_code=401, detail="unauthorized")
 
 
 # --- discovery / health ----------------------------------------------------
@@ -52,6 +53,9 @@ def _check_auth(authorization: str | None) -> None:
 async def agent_card() -> JSONResponse:
     card = json.loads(CARD_PATH.read_text(encoding="utf-8"))
     card["url"] = f"{CONFIG.public_url.rstrip('/')}/a2a"
+    card["documentationUrl"] = (
+        f"{CONFIG.repository_url.rstrip('/')}/blob/main/README.md"
+    )
     return JSONResponse(card)
 
 
@@ -90,6 +94,16 @@ def extract_topic(body: dict) -> str:
     return ""
 
 
+def extract_research_request(body: dict) -> ResearchRequest:
+    """Preserve structured research fields while accepting common A2A text shapes."""
+
+    payload = dict(body)
+    topic = extract_topic(body)
+    if topic and not payload.get("topic"):
+        payload["topic"] = topic
+    return ResearchRequest.from_payload(payload)
+
+
 def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
@@ -97,9 +111,14 @@ def _sse(obj: dict) -> str:
 @app.post("/a2a")
 async def a2a(request: Request, authorization: str | None = Header(default=None)):
     _check_auth(authorization)
-    body = await request.json()
-    topic = extract_topic(body)
-    if not topic:
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("request body must be an object")
+        research_request = extract_research_request(body)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return JSONResponse(status_code=422, content={"detail": "invalid request"})
+    if not research_request.question:
         raise HTTPException(status_code=422, detail="no task/topic found in message")
 
     wants_stream = (
@@ -113,7 +132,7 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
     # Second advertised skill on the Agent Card — must actually work when called.
     if skill == "audit_claims":
         try:
-            result = await DebateOrchestrator().audit_claims(topic)
+            result = await DebateOrchestrator().audit_claims(research_request)
         except Exception:
             log.exception("audit_claims failed")   # detail stays in server logs, not response
             return JSONResponse(status_code=500,
@@ -122,7 +141,7 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
 
     if not wants_stream:
         try:
-            result = await DebateOrchestrator().run(topic)
+            result = await DebateOrchestrator().run(research_request)
         except Exception:                        # never leak internals to the A2A caller
             log.exception("debate failed")
             return JSONResponse(status_code=500,
@@ -139,7 +158,7 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
     async def stream():
         orch = DebateOrchestrator()
         try:
-            async for ev in orch.stream(topic, pace=pace):
+            async for ev in orch.stream(research_request, pace=pace):
                 yield _sse(ev)
         except Exception:                        # keep the SSE connection well-formed
             log.exception("stream failed")
