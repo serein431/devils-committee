@@ -7,6 +7,12 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
+_NON_TICKER = {
+    "BUY", "SELL", "HOLD", "NOW", "THE", "AND", "FOR", "VS", "US", "USD",
+    "CNY", "AI", "IPO", "ETF", "CEO", "CFO", "PE", "PB", "EPS", "ROE",
+    "ROI", "YOY", "Q1", "Q2", "Q3", "Q4", "A", "I", "OK", "WHY", "HOW",
+}
+
 
 def normalize_symbol(value: str) -> tuple[str, str]:
     raw = value.strip().upper()
@@ -22,13 +28,20 @@ def normalize_symbol(value: str) -> tuple[str, str]:
 
 def symbol_from_text(text: str) -> tuple[str, str]:
     match = re.search(
-        r"(?i)(?<!\w)(?:sh|sz)?\d{6}(?:\.[A-Za-z0-9_]+)?(?!\w|\.[A-Za-z0-9_])",
+        r"(?i)(?<![A-Za-z0-9_])(?:sh|sz)?\d{6}"
+        r"(?:\.[A-Za-z0-9_.-]+)?(?![A-Za-z0-9_]|\.[A-Za-z0-9_])",
         text,
     )
     if match:
         return normalize_symbol(match.group(0))
-    match = re.search(r"(?<!\w)(\d{5}\.HK|[A-Z]{1,5})(?!\w)", text)
-    return normalize_symbol(match.group(1)) if match else ("UNKNOWN", "unknown")
+    for match in re.finditer(
+        r"(?<![A-Za-z0-9_])(\d{5}\.HK|[A-Z]{1,5})(?![A-Za-z0-9_])",
+        text,
+    ):
+        candidate = match.group(1)
+        if candidate not in _NON_TICKER:
+            return normalize_symbol(candidate)
+    return "UNKNOWN", "unknown"
 
 
 @dataclass(frozen=True)
@@ -53,10 +66,11 @@ class ResearchRequest:
             if payload.get("symbol")
             else symbol_from_text(topic)
         )
-        end = str(payload.get("end_date") or date.today().strftime("%Y%m%d"))
+        today = date.today()
+        end = str(payload.get("end_date") or today.strftime("%Y%m%d"))
         start = str(
             payload.get("start_date")
-            or (date.today() - timedelta(days=730)).strftime("%Y%m%d")
+            or (today - timedelta(days=730)).strftime("%Y%m%d")
         )
         return cls(
             symbol=symbol,

@@ -10,6 +10,7 @@ def test_normalizes_supported_a_share_symbols():
 def test_marks_hk_and_us_as_unsupported():
     assert normalize_symbol("00700.HK") == ("00700.HK", "unsupported")
     assert normalize_symbol("NVDA") == ("NVDA", "unsupported")
+    assert normalize_symbol("AI") == ("AI", "unsupported")
 
 
 def test_text_a_share_suffix_overrides_prefix():
@@ -20,12 +21,32 @@ def test_text_symbol_does_not_match_inside_longer_identifier():
     assert symbol_from_text("研究 abcSH600519.SZdef") == ("UNKNOWN", "unknown")
 
 
+def test_text_symbol_allows_chinese_adjacency():
+    assert symbol_from_text("分析600519怎么样") == ("600519.SH", "cn")
+    assert symbol_from_text("看看300750.SZ风险") == ("300750.SZ", "cn")
+
+
+def test_text_symbol_skips_non_ticker_words():
+    assert symbol_from_text("BUY AAPL NOW") == ("AAPL", "unsupported")
+    assert symbol_from_text("SELL TSLA") == ("TSLA", "unsupported")
+    assert symbol_from_text("the ETF for NVDA") == ("NVDA", "unsupported")
+    assert symbol_from_text("分析 AI 行业") == ("UNKNOWN", "unknown")
+
+
 def test_text_symbol_rejects_invalid_suffix_continuation():
     assert symbol_from_text("研究 SH600519.SZX") == ("UNKNOWN", "unknown")
 
 
 def test_text_symbol_rejects_non_a_share_exchange_suffix():
     assert symbol_from_text("研究 600519.HK") == ("UNKNOWN", "unknown")
+
+
+def test_text_symbol_rejects_repeated_dot_suffix():
+    assert symbol_from_text("研究 600519..SZ") == ("UNKNOWN", "unknown")
+
+
+def test_text_symbol_rejects_hyphenated_suffix():
+    assert symbol_from_text("研究 SH600519.-SZ") == ("UNKNOWN", "unknown")
 
 
 def test_payload_fields_override_text_defaults():
