@@ -10,6 +10,7 @@ Group=devils
 WorkingDirectory=/opt/devils-committee
 EnvironmentFile=/etc/devils-committee/devils-committee.env
 Environment=HOME=/var/lib/devils-committee
+Environment=PANDA_STATE_DIR=/var/lib/devils-committee
 Environment=CACHE_DIR=/var/lib/devils-committee/cache
 Environment=PRECOMPUTED_DIR=/var/lib/devils-committee/precomputed
 ExecStart=/opt/devils-committee/.venv-real/bin/uvicorn backend.a2a_server:app --host 127.0.0.1 --port 18081 --workers 1

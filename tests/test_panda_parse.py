@@ -356,6 +356,23 @@ def test_normalize_frame_rejects_unparseable_real_pandas_date(value):
         normalize_frame(pd.DataFrame({"date": [value]}))
 
 
+def test_panda_auth_file_uses_configured_state_directory(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from backend.skills import panda
+
+    auth_manager = SimpleNamespace(_user_json_dir=None)
+    monkeypatch.setattr(
+        panda,
+        "CONFIG",
+        SimpleNamespace(panda_state_dir=str(tmp_path)),
+    )
+
+    panda._configure_panda_state_dir(SimpleNamespace(auth_manager=auth_manager))
+
+    assert auth_manager._user_json_dir == str(tmp_path.resolve())
+
+
 @pytest.mark.parametrize(
     "column",
     ["Authorization", "access_TOKEN", "dbPassword", "client_secret", "CookieJar"],

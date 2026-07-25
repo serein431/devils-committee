@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from datetime import date, datetime
 from numbers import Real
@@ -183,6 +184,19 @@ _SEPARATED_DATE = re.compile(
 _MISSING_DATE_STRINGS = {"nan", "nat", "none", "null", "0000-00-00", "00000000"}
 
 
+def _configure_panda_state_dir(panda_data: Any) -> None:
+    """Keep PandaData's encrypted login file outside the read-only code tree."""
+    state_dir = CONFIG.panda_state_dir.strip()
+    if not state_dir:
+        return
+    os.makedirs(state_dir, exist_ok=True)
+    auth_manager = getattr(panda_data, "auth_manager", None)
+    if auth_manager is None:
+        from panda_data import auth_manager
+
+    auth_manager._user_json_dir = os.path.abspath(state_dir)
+
+
 def _date_value_is_missing(value: Any) -> bool:
     if value is None:
         return True
@@ -311,6 +325,7 @@ def build_market_data_bundle(request: ResearchRequest) -> MarketDataBundle:
     panda_data = None
     try:
         import panda_data  # type: ignore
+        _configure_panda_state_dir(panda_data)
         sdk_version = str(getattr(panda_data, "__version__", None) or "0.0.12")
     except Exception:
         sdk_version = "0.0.12"

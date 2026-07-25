@@ -18,6 +18,7 @@ if os.environ.get("RUN_LIVE_INTEGRATION") != "1":
         "LLM_MODEL",
         "DEFAULT_USERNAME",
         "DEFAULT_PASSWORD",
+        "PANDA_STATE_DIR",
         "A2A_BEARER_TOKEN",
         "BUILD_COMMIT",
         "PRECOMPUTED_COMMIT",

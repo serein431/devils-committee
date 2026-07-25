@@ -71,6 +71,9 @@ class Config:
     panda_base_url: str = field(
         default_factory=lambda: _env("JAVA_SERVICE_BASE_URL", "http://pandadata.pandaaiquant.com")
     )
+    panda_state_dir: str = field(
+        default_factory=lambda: _env("PANDA_STATE_DIR", "./var/panda")
+    )
 
     # Local data and QuantSkills resources.
     quantskills_dir: str = field(default_factory=lambda: _env("QUANTSKILLS_DIR", "./vendor/quantskills"))
