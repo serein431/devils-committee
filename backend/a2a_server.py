@@ -398,9 +398,12 @@ def _progress_text(event: dict) -> str | None:
         return event.get("msg") or "正在运行金融 Skills。"
     if stage == "argue":
         return event.get("msg") or "四个研究 Agent 正在分析同一批证据。"
+    if stage == "rebut":
+        return event.get("msg") or "四个研究 Agent 正在交叉质询首轮论据。"
     if stage == "claim_start":
         name = event.get("agent") or event.get("side") or "研究 Agent"
-        return f"{name} 开始陈述。"
+        action = "开始回应对方论据" if event.get("kind") == "rebuttal" else "开始陈述"
+        return f"{name} {action}。"
     if stage == "audit":
         return event.get("msg") or "审计 Agent 正在核查证据。"
     if stage == "synthesize":

@@ -294,7 +294,10 @@ def _adjustment_rows(
     bundle: MarketDataBundle,
 ) -> tuple[list[dict[str, Any]], str]:
     daily = _read_records(bundle, "daily")
-    adjusted = _read_records(bundle, "daily_post")
+    # PandaData's post-adjusted series can omit otherwise valid trading days.
+    # Use the complete pre-adjusted series so a missing adjusted row is never
+    # backfilled with an incomparable raw close and reported as a false jump.
+    adjusted = _read_records(bundle, "daily_pre")
     factors = _read_records(bundle, "adj_factor")
     dividend = (
         _read_records(bundle, "dividend")
@@ -887,7 +890,7 @@ class OnlineSkillRunner:
         missing = missing_input_result(
             "skill-corporate-action-adjustment-auditor",
             bundle,
-            ["daily", "daily_post", "adj_factor"],
+            ["daily", "daily_pre", "adj_factor"],
         )
         if missing is not None:
             return missing

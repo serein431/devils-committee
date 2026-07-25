@@ -69,6 +69,9 @@ def test_full_debate_runs_through_openai_path(monkeypatch, evidence_fixture):
 
 def test_openai_audit_reasons_route_through_llm(monkeypatch, evidence_fixture):
     _install_fake_openai(monkeypatch)
+    evidence_fixture.results[
+        "skill-corporate-action-adjustment-auditor"
+    ].outcome = "fail"
     from backend import orchestration
     monkeypatch.setattr(orchestration, "get_llm", llm_mod.get_llm)
 

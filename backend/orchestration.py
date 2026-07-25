@@ -26,7 +26,7 @@ from .skills.runner import ResearchEvidence, SkillRunner
 
 GLOBAL_BUDGET_SEC = CONFIG.request_budget_sec
 PER_AGENT_TIMEOUT_SEC = 120
-MAX_AUDIT_ROUNDS = 1
+MAX_AUDIT_ROUNDS = 2
 
 _PUBLIC_TIMEOUT = "研究请求超过内部时间限制。"
 _PUBLIC_DATA_ERROR = "研究数据暂不可用，请稍后重试。"
@@ -34,6 +34,11 @@ _PUBLIC_INSUFFICIENT = "当前没有足够的授权数据支持研究。"
 _PUBLIC_UNSUPPORTED = "当前真实研究只支持 A 股代码。"
 _NO_MOCK_SUBSTITUTE = "当前结果没有使用模拟数据代替真实证据。"
 _UNAVAILABLE_SKILL_STATUSES = {"error", "insufficient-evidence"}
+_HARD_FAIL_AUDIT_STATUSES = {
+    "bad_data",
+    "selection_bias",
+    "suspected_overfit",
+}
 
 
 def _empty_result(
@@ -235,6 +240,9 @@ class DebateOrchestrator:
                                 "id": f"{agent.side}-1",
                                 "agent": agent.__class__.__name__.removesuffix("Agent"),
                                 "side": agent.side,
+                                "kind": "position",
+                                "round": 1,
+                                "responds_to": [],
                             }
                             announced[agent.side] = True
                         yield {
@@ -242,6 +250,9 @@ class DebateOrchestrator:
                             "id": f"{agent.side}-1",
                             "agent": agent.__class__.__name__.removesuffix("Agent"),
                             "side": agent.side,
+                            "kind": "position",
+                            "round": 1,
+                            "responds_to": [],
                             "delta": payload,
                         }
                         continue
@@ -252,25 +263,14 @@ class DebateOrchestrator:
                         claim.plain = plain_claim(claim.side)
                         claims.append(claim)
                         if not announced[agent.side]:
-                            yield {
-                                "stage": "claim_start",
-                                "id": claim.id,
-                                "agent": claim.agent,
-                                "side": claim.side,
-                            }
+                            yield _claim_event("claim_start", claim)
                             announced[agent.side] = True
                             yield {
-                                "stage": "claim_delta",
-                                "id": claim.id,
-                                "agent": claim.agent,
-                                "side": claim.side,
+                                **_claim_event("claim_delta", claim),
                                 "delta": claim.text,
                             }
                         yield {
-                            "stage": "claim",
-                            "id": claim.id,
-                            "agent": claim.agent,
-                            "side": claim.side,
+                            **_claim_event("claim", claim),
                             "text": claim.text,
                             "plain": claim.plain,
                             "confidence": claim.confidence,
@@ -284,34 +284,148 @@ class DebateOrchestrator:
                         task.cancel()
                 await asyncio.gather(*agent_tasks, return_exceptions=True)
 
-            verdicts: list[AuditVerdict] = []
-            for round_index in range(MAX_AUDIT_ROUNDS):
+            initial_claims = list(claims)
+            yield {
+                "stage": "audit",
+                "round": 1,
+                "msg": "审计 Agent 独立检查每一条首轮论据…",
+            }
+            await _pace_within_budget(pace, deadline)
+            initial_verdicts = await asyncio.wait_for(
+                self.audit.audit(evidence, initial_claims),
+                timeout=_require_remaining(deadline),
+            )
+            _normalize_missing_evidence_verdicts(initial_claims, initial_verdicts)
+            async for event in _audit_flag_events(initial_verdicts, pace, deadline):
+                yield event
+
+            rebuttal_targets = _build_rebuttal_targets(
+                agents,
+                initial_claims,
+                initial_verdicts,
+            )
+            yield {
+                "stage": "rebut",
+                "round": 2,
+                "symbol": request.symbol,
+                "msg": f"四个 Agent 就 {request.symbol} 并行交叉质询…",
+            }
+
+            rebuttals: list[Claim] = []
+            rebuttal_queue: asyncio.Queue[tuple[str, object, object]] = asyncio.Queue()
+            rebuttal_announced = {agent.side: False for agent in agents}
+
+            async def collect_rebuttal(current, own_claim, targets, target_verdicts):
+                async def forward_delta(delta):
+                    await rebuttal_queue.put(("delta", current, delta))
+
+                side_claims = await self._rebut(
+                    current,
+                    evidence,
+                    own_claim,
+                    targets,
+                    target_verdicts,
+                    deadline,
+                    on_delta=forward_delta,
+                )
+                await rebuttal_queue.put(("done", current, side_claims))
+
+            rebuttal_tasks = [
+                asyncio.create_task(
+                    collect_rebuttal(agent, own_claim, targets, target_verdicts)
+                )
+                for agent, own_claim, targets, target_verdicts in rebuttal_targets
+            ]
+            completed = 0
+            try:
+                while completed < len(rebuttal_tasks):
+                    kind, agent, payload = await asyncio.wait_for(
+                        rebuttal_queue.get(), timeout=_require_remaining(deadline)
+                    )
+                    stream_id = f"{agent.side}-2"
+                    if kind == "delta":
+                        if not rebuttal_announced[agent.side]:
+                            yield {
+                                "stage": "claim_start",
+                                "id": stream_id,
+                                "agent": agent.__class__.__name__.removesuffix("Agent"),
+                                "side": agent.side,
+                                "kind": "rebuttal",
+                                "round": 2,
+                                "responds_to": [
+                                    claim.id
+                                    for item in rebuttal_targets
+                                    if item[0] is agent
+                                    for claim in item[2]
+                                ],
+                            }
+                            rebuttal_announced[agent.side] = True
+                        yield {
+                            "stage": "claim_delta",
+                            "id": stream_id,
+                            "agent": agent.__class__.__name__.removesuffix("Agent"),
+                            "side": agent.side,
+                            "kind": "rebuttal",
+                            "round": 2,
+                            "responds_to": [
+                                claim.id
+                                for item in rebuttal_targets
+                                if item[0] is agent
+                                for claim in item[2]
+                            ],
+                            "delta": payload,
+                        }
+                        continue
+
+                    completed += 1
+                    side_claims = payload
+                    for claim in side_claims:
+                        claim.plain = plain_claim(claim.side)
+                        rebuttals.append(claim)
+                        if not rebuttal_announced[agent.side]:
+                            yield _claim_event("claim_start", claim)
+                            rebuttal_announced[agent.side] = True
+                            yield {
+                                **_claim_event("claim_delta", claim),
+                                "delta": claim.text,
+                            }
+                        yield {
+                            **_claim_event("claim", claim),
+                            "text": claim.text,
+                            "plain": claim.plain,
+                            "confidence": claim.confidence,
+                            "skills_used": claim.skills_used,
+                            "evidence": [item.to_dict() for item in claim.evidence],
+                        }
+                    await _pace_within_budget(pace, deadline)
+            finally:
+                for task in rebuttal_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*rebuttal_tasks, return_exceptions=True)
+
+            rebuttal_verdicts: list[AuditVerdict] = []
+            if rebuttals:
                 yield {
                     "stage": "audit",
-                    "round": round_index,
-                    "msg": "审计 Agent 独立检查每一条论据…",
+                    "round": 2,
+                    "msg": "审计 Agent 独立复核交叉质询…",
                 }
                 await _pace_within_budget(pace, deadline)
-                verdicts = await asyncio.wait_for(
-                    self.audit.audit(evidence, claims),
+                rebuttal_verdicts = await asyncio.wait_for(
+                    self.audit.audit(evidence, rebuttals),
                     timeout=_require_remaining(deadline),
                 )
-                _normalize_missing_evidence_verdicts(claims, verdicts)
-                for verdict in verdicts:
-                    if verdict.passed:
-                        continue
-                    yield {
-                        "stage": "audit_flag",
-                        "claim_id": verdict.claim_id,
-                        "status": verdict.status,
-                        "reason": verdict.reason,
-                        "severity": verdict.severity,
-                        "remediation": verdict.remediation,
-                        "plain": verdict.plain,
-                        "provenance": verdict.provenance,
-                        "audit_skill": verdict.audit_skill,
-                    }
-                    await _pace_within_budget(pace, deadline)
+                _normalize_missing_evidence_verdicts(rebuttals, rebuttal_verdicts)
+                async for event in _audit_flag_events(
+                    rebuttal_verdicts,
+                    pace,
+                    deadline,
+                ):
+                    yield event
+
+            claims.extend(rebuttals)
+            verdicts = initial_verdicts + rebuttal_verdicts
 
             yield {"stage": "synthesize", "msg": "主持汇总共识与分歧…"}
             synthesis = await asyncio.wait_for(
@@ -394,6 +508,45 @@ class DebateOrchestrator:
         except Exception as exc:
             _log_failure(
                 f"agent {getattr(agent, 'side', '?')}",
+                exc,
+            )
+            return []
+
+    async def _rebut(
+        self,
+        agent,
+        evidence: ResearchEvidence,
+        own_claim: Claim,
+        targets: list[Claim],
+        target_verdicts: list[AuditVerdict],
+        deadline: float,
+        on_delta=None,
+    ) -> list[Claim]:
+        """Return no rebuttal when one agent times out or fails privately."""
+
+        timeout = min(PER_AGENT_TIMEOUT_SEC, max(0.0, deadline - _mono()))
+        if timeout <= 0:
+            return []
+        try:
+            if on_delta is None:
+                call = agent.rebut(
+                    evidence,
+                    own_claim,
+                    targets,
+                    target_verdicts,
+                )
+            else:
+                call = agent.rebut(
+                    evidence,
+                    own_claim,
+                    targets,
+                    target_verdicts,
+                    on_delta=on_delta,
+                )
+            return await asyncio.wait_for(call, timeout=timeout)
+        except Exception as exc:
+            _log_failure(
+                f"rebuttal agent {getattr(agent, 'side', '?')}",
                 exc,
             )
             return []
@@ -600,6 +753,94 @@ def _empty_audit_payload(
             "disclaimer": result.disclaimer,
         }
     )
+
+
+def _build_rebuttal_targets(
+    agents: list,
+    claims: list[Claim],
+    verdicts: list[AuditVerdict],
+) -> list[tuple[object, Claim, list[Claim], list[AuditVerdict]]]:
+    """Build the fixed cross-examination graph from first-round artifacts."""
+
+    agents_by_side = {agent.side: agent for agent in agents}
+    claims_by_side = {claim.side: claim for claim in claims}
+    verdicts_by_id = {verdict.claim_id: verdict for verdict in verdicts}
+    target_sides: dict[str, list[str]] = {
+        "bull": ["bear"],
+        "bear": ["bull"],
+        "macro": ["bull", "bear"],
+    }
+
+    directional = [
+        claims_by_side[side]
+        for side in ("bull", "bear", "macro")
+        if side in claims_by_side
+    ]
+    if directional:
+        eligible = [
+            claim
+            for claim in directional
+            if verdicts_by_id.get(claim.id) is None
+            or verdicts_by_id[claim.id].status not in _HARD_FAIL_AUDIT_STATUSES
+        ]
+        risk_target = max(
+            eligible or directional,
+            key=lambda claim: claim.confidence,
+        )
+        target_sides["risk"] = [risk_target.side]
+
+    result = []
+    for side in ("bull", "bear", "macro", "risk"):
+        agent = agents_by_side.get(side)
+        own_claim = claims_by_side.get(side)
+        targets = [
+            claims_by_side[target_side]
+            for target_side in target_sides.get(side, [])
+            if target_side in claims_by_side
+        ]
+        if agent is None or own_claim is None or not targets:
+            continue
+        target_verdicts = [
+            verdicts_by_id[target.id]
+            for target in targets
+            if target.id in verdicts_by_id
+        ]
+        result.append((agent, own_claim, targets, target_verdicts))
+    return result
+
+
+def _claim_event(stage: str, claim: Claim) -> dict:
+    return {
+        "stage": stage,
+        "id": claim.id,
+        "agent": claim.agent,
+        "side": claim.side,
+        "kind": claim.kind,
+        "round": claim.round,
+        "responds_to": list(claim.responds_to),
+    }
+
+
+async def _audit_flag_events(
+    verdicts: list[AuditVerdict],
+    pace: float,
+    deadline: float,
+):
+    for verdict in verdicts:
+        if verdict.passed:
+            continue
+        yield {
+            "stage": "audit_flag",
+            "claim_id": verdict.claim_id,
+            "status": verdict.status,
+            "reason": verdict.reason,
+            "severity": verdict.severity,
+            "remediation": verdict.remediation,
+            "plain": verdict.plain,
+            "provenance": verdict.provenance,
+            "audit_skill": verdict.audit_skill,
+        }
+        await _pace_within_budget(pace, deadline)
 
 
 async def _pace_within_budget(pace: float, deadline: float) -> None:

@@ -134,6 +134,8 @@ ok("stream controls include pause and show-all",
 for (const id of ["voiceInput", "voiceOutput", "voicePause", "voiceStop", "voiceStatus"]) {
   ok(`voice control #${id} exists`, !!document.getElementById(id));
 }
+ok("follow-up and new-question controls are distinct",
+   document.getElementById("go") && document.getElementById("newQuestion"));
 ok("voice status is announced accessibly",
    document.getElementById("voiceStatus").getAttribute("aria-live") === "polite");
 for (const id of ["voiceInput", "voiceOutput", "voicePause", "voiceStop"]) {
@@ -281,6 +283,24 @@ ok("missing evidence has its own audit label",
 ok("audit reasons render bold Markdown",
    document.querySelector("#verdicts .vrow:last-child .vreason strong")?.textContent === "状态数据");
 
+window.handleEvent({ stage: "rebut", msg: "四方开始定向回应" });
+ok("rebuttal stage is visible", document.getElementById("stage").textContent.includes("定向回应"));
+window.handleEvent({
+  stage: "claim_start", id: "bull-2", agent: "bull", side: "bull",
+  kind: "rebuttal", round: 2, responds_to: ["bear-1"],
+});
+await window.handleEvent({
+  stage: "claim_delta", id: "bull-2", agent: "bull", side: "bull",
+  kind: "rebuttal", round: 2, responds_to: ["bear-1"], delta: "回应 bear-1 的流动性前提。",
+});
+window.handleEvent({
+  stage: "claim", id: "bull-2", agent: "bull", side: "bull", confidence: 0.55,
+  kind: "rebuttal", round: 2, responds_to: ["bear-1"],
+  text: "回应 bear-1 的流动性前提。", plain: "", skills_used: [], evidence: [],
+});
+ok("rebuttal card names the claim it answers",
+   document.querySelector("#card-bull-2 .reply")?.textContent.includes("bear-1"));
+
 // unflagged claims pass on synthesize
 window.handleEvent({ stage: "synthesize" });
 ok("unflagged stamp turned green", document.getElementById("stamp-bear-1").className.includes("ok"));
@@ -336,7 +356,7 @@ ok("map + summary sections visible", !document.getElementById("mapSec").classNam
    !document.getElementById("sumSec").className.includes("hidden"));
 await new Promise(resolve => window.setTimeout(resolve, 80));
 ok("first screen keeps the last detailed statement after completion",
-   document.getElementById("stageQuote").textContent.includes("关键状态数据缺失") &&
+   document.getElementById("stageQuote").textContent.includes("回应 bear-1 的流动性前提") &&
    !document.getElementById("stageQuote").textContent.includes("向下滑动"));
 ok("completion does not freeze the last speaker in front",
    document.querySelectorAll("#faceStage .face-player.is-active").length === 0 &&
@@ -420,6 +440,9 @@ window.handleEvent({
 });
 ok("zero-claim result renders safely", document.getElementById("auditSub").textContent.includes("没有可审计论据"));
 ok("zero-claim result is not called all pass", !document.getElementById("auditSub").textContent.includes("全部通过"));
+ok("completed research exposes separate follow-up and new-question actions",
+   document.getElementById("go").textContent.includes("追问") &&
+   !document.getElementById("newQuestion").classList.contains("hidden"));
 
 document.getElementById("q").value = "那波动风险怎么看？";
 document.getElementById("go").click();
@@ -431,6 +454,14 @@ ok("follow-up includes the prior conversation context",
 ok("follow-up appends a second visible conversation round",
    document.querySelectorAll("#debate .round-question").length === 2 &&
    document.querySelector('#debate .round-question[data-round="2"]').textContent.includes("那波动风险怎么看"));
+
+document.getElementById("q").value = "300750.SZ 的流动性风险";
+document.getElementById("newQuestion").click();
+await new Promise(resolve => window.setTimeout(resolve, 10));
+const newQuestionPayload = JSON.parse(fetchCalls.at(-1).options.body);
+ok("new-question action starts without prior conversation context",
+   newQuestionPayload.topic === "300750.SZ 的流动性风险" &&
+   document.querySelectorAll("#debate .round-question").length === 1);
 
 const recognitionCount = recognitions.length;
 document.getElementById("voiceInput").click();

@@ -24,7 +24,7 @@
     {
       "id": "debate_case",
       "name": "debate_case",
-      "description": "Research an A-share question with bull, bear, macro and risk agents, audit the evidence and model risks, then explain consensus, disagreements and risk boundaries without buy or sell instructions.",
+      "description": "Research an A-share question with bull, bear, macro and risk agents, independently audit their initial claims, run one targeted cross-examination round, re-audit the responses, then explain consensus, disagreements and risk boundaries without buy or sell instructions.",
       "tags": ["a-share", "multi-agent", "research", "audit", "education"],
       "examples": [
         "研究 600519.SH 的复权、分红、因子和流动性风险",

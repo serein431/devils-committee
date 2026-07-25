@@ -70,6 +70,10 @@ class _Base:
         has_domain_issue = any(
             item.outcome in {"fail", "warning"} for item in selected
         )
+        has_unverified_analysis = any(
+            item.status == "success" and item.outcome is None
+            for item in selected
+        )
         public_evidence = [item.to_dict() for item in items]
         if insufficient:
             warnings = list(dict.fromkeys(
@@ -121,9 +125,78 @@ class _Base:
                 agent=self.__class__.__name__.removesuffix("Agent"),
                 side=self.side,
                 text=text,
-                confidence=(0.3 if insufficient else 0.45 if has_domain_issue else 0.65),
+                confidence=(
+                    0.3
+                    if insufficient
+                    else 0.45
+                    if has_domain_issue or has_unverified_analysis
+                    else 0.65
+                ),
                 evidence=items,
                 skills_used=[item.skill_id for item in items],
+            )
+        ]
+
+    async def rebut(
+        self,
+        evidence: ResearchEvidence,
+        own_claim: Claim,
+        targets: list[Claim],
+        target_verdicts: list[AuditVerdict],
+        on_delta: Callable[[str], Awaitable[None] | None] | None = None,
+    ) -> list[Claim]:
+        if not targets:
+            return []
+
+        chosen = [
+            evidence.results[skill_id]
+            for skill_id in ROLE_SKILLS[self.side]
+            if skill_id in evidence.results
+        ]
+        available = [item for item in chosen if item.status == "success"]
+        selected = available or chosen
+        items = [evidence_from_result(item) for item in selected]
+        if not items:
+            return []
+
+        llm_args = {
+            "side": self.side,
+            "symbol": evidence.request.symbol,
+            "evidence": [item.to_dict() for item in items],
+            "own_claim": own_claim.to_dict(),
+            "targets": [target.to_dict() for target in targets],
+            "target_verdicts": [verdict.to_dict() for verdict in target_verdicts],
+        }
+        if on_delta is None:
+            text = await asyncio.to_thread(self.llm.rebut, **llm_args)
+        else:
+            parts = []
+            iterator = iter(self.llm.rebut_stream(**llm_args))
+            while True:
+                finished, delta = await asyncio.to_thread(
+                    _next_stream_delta,
+                    iterator,
+                )
+                if finished:
+                    break
+                if not delta:
+                    continue
+                parts.append(delta)
+                await _call_delta(on_delta, delta)
+            text = "".join(parts)
+
+        return [
+            Claim(
+                id=f"{self.side}-2",
+                agent=self.__class__.__name__.removesuffix("Agent"),
+                side=self.side,
+                text=text,
+                confidence=own_claim.confidence,
+                evidence=items,
+                skills_used=[item.skill_id for item in items],
+                kind="rebuttal",
+                round=2,
+                responds_to=[target.id for target in targets],
             )
         ]
 
@@ -208,10 +281,15 @@ class AuditAgent(_Base):
                     item
                     for item in relevant
                     if item.findings
-                    and (
-                        item.outcome in {"fail", "warning"}
-                        or item.outcome is None
-                    )
+                    and item.outcome in {"fail", "warning"}
+                ),
+                None,
+            )
+            indeterminate = next(
+                (
+                    item
+                    for item in relevant
+                    if item.status == "success" and item.outcome is None
                 ),
                 None,
             )
@@ -230,6 +308,8 @@ class AuditAgent(_Base):
             elif flagged is not None:
                 status = AUDIT_STATUS[flagged.skill_id]
                 source, severity = flagged, "medium"
+            elif indeterminate is not None:
+                status, source, severity = "thin_data", indeterminate, "low"
             elif relevant:
                 status, source, severity = "pass", None, "none"
             elif successful_claim_results:
@@ -244,9 +324,15 @@ class AuditAgent(_Base):
             detail = source.to_dict() if source else {}
             if status == "pass":
                 reason = (
-                    f"{source.skill_id} 已成功执行，当前结果未报告需要驳回的领域异常。"
+                    f"{source.skill_id} 已成功执行，当前论据没有引用不可用证据；"
+                    "这里的通过不代表预测性、因果性、稳定性或可交易性已经验证。"
                     if source
                     else "现有独立审计结果没有指出可发布的问题。"
+                )
+            elif status == "thin_data" and source is not None and source.outcome is None:
+                reason = (
+                    f"{source.skill_id} 已成功生成分析结果，但没有提供 pass/fail/warning "
+                    "领域判决；不能据此确认异常，也不能标记为领域验证通过。"
                 )
             elif source is None:
                 reason = (
@@ -270,6 +356,8 @@ class AuditAgent(_Base):
                     remediation=(
                         "接入与该论据对应的独立审计器后重新运行。"
                         if status == "missing_evidence" and source is None
+                        else "补充明确的领域审计结论或独立确认结果。"
+                        if status == "thin_data" and source is not None and source.outcome is None
                         else "补齐缺失字段并重新运行对应 QuantSkill。"
                         if status == "missing_evidence"
                         else "核对引用的异常记录、输入口径与调整因子后重新运行。"
@@ -294,7 +382,34 @@ class ChairAgent(_Base):
         claims: list[Claim],
         verdicts: list[AuditVerdict],
     ) -> dict:
-        by_side = {claim.side: claim for claim in claims}
+        positions = [
+            claim
+            for claim in claims
+            if claim.kind == "position" and claim.round == 1
+        ]
+        by_side = {claim.side: claim for claim in positions}
+        verdict_by_claim = {verdict.claim_id: verdict for verdict in verdicts}
+        accepted_rebuttals = [
+            claim
+            for claim in claims
+            if claim.kind == "rebuttal"
+            and claim.round == 2
+            and verdict_by_claim.get(claim.id) is not None
+            and verdict_by_claim[claim.id].passed
+        ]
+
+        def view_with_rebuttals(claim: Claim | None) -> str:
+            if claim is None:
+                return "本轮没有陈述。"
+            replies = [
+                f"{reply.agent} 回应：{reply.text}"
+                for reply in accepted_rebuttals
+                if claim.id in reply.responds_to
+            ]
+            if not replies:
+                return claim.text
+            return f"{claim.text}\n第二轮回应：{' '.join(replies)}"
+
         bull = by_side.get("bull")
         bear = by_side.get("bear")
         risk = by_side.get("risk")
@@ -305,8 +420,14 @@ class ChairAgent(_Base):
             disagreements.append(
                 DisagreementPoint(
                     topic="多空证据分歧",
-                    bull_view=bull.text if bull else "本轮没有多头陈述。",
-                    bear_view=bear.text if bear else "本轮没有空头陈述。",
+                    bull_view=(
+                        view_with_rebuttals(bull)
+                        if bull else "本轮没有多头陈述。"
+                    ),
+                    bear_view=(
+                        view_with_rebuttals(bear)
+                        if bear else "本轮没有空头陈述。"
+                    ),
                     status="open",
                 )
             )
@@ -314,7 +435,7 @@ class ChairAgent(_Base):
             disagreements.append(
                 DisagreementPoint(
                     topic="风险边界",
-                    bull_view=risk.text,
+                    bull_view=view_with_rebuttals(risk),
                     bear_view="审计结果见风险提示。",
                     status="open" if flags else "consensus",
                 )

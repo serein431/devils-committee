@@ -38,6 +38,7 @@ def _request() -> ResearchRequest:
 def _bundle() -> MarketDataBundle:
     names = (
         "daily",
+        "daily_pre",
         "daily_post",
         "adj_factor",
         "dividend",
@@ -196,9 +197,13 @@ def test_adjustment_rows_use_iso_dates_and_explicit_cash_split_sources(monkeypat
             {"date": "20240101", "close": 100.0},
             {"date": "20240102", "close": 99.0},
         ],
-        "daily_post": [
+        "daily_pre": [
             {"date": "20240101", "close": 100.0},
             {"date": "20240102", "close": 100.0},
+        ],
+        # An incomplete post-adjusted response must not be mixed with raw closes.
+        "daily_post": [
+            {"date": "20240102", "close": 135.0},
         ],
         # ex_factor includes cash/share effects and must not be treated as a split.
         "adj_factor": [{"ex_date": "20240102", "ex_factor": 9.0}],

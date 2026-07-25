@@ -20,13 +20,26 @@ from .config import CONFIG
 
 # Persona voices — the "气质" the手册 leaves as a canvas; here are sane defaults.
 PERSONAS = {
-    "bull":  {"name": "Bull 多头", "voice": "亢奋但要摆证据，聚焦上行逻辑与因子支撑"},
+    "bull":  {"name": "Bull 多头", "voice": "寻找上行可能，但必须区分因子入选与方向、预测证据"},
     "bear":  {"name": "Bear 空头", "voice": "冷静挑刺，盯流动性、事件与持仓风险"},
     "macro": {"name": "Macro 宏观", "voice": "抽离个股，谈风格与环境背景"},
     "risk":  {"name": "Risk 风控", "voice": "只讲暴露、异常与合规边界，不站队"},
     "audit": {"name": "Audit 魔鬼代言人", "voice": "阴阳怪气地抓假证据，绝不把'没证据'说成'没问题'"},
     "chair": {"name": "Chair 主持", "voice": "克制收敛，只画分歧地图，不下结论"},
 }
+
+_EVIDENCE_INTERPRETATION = (
+    "字段语义必须严格遵守：status=success 只表示 Skill 成功执行；"
+    "outcome 才是审计型 Skill 的 pass/fail/warning 领域判决。"
+    "分析型 Skill 的 outcome=null 是正常值，不等于失败、资料缺失、未经运行或负面证据，"
+    "也不能据此标记为通过。"
+    "findings 本身不等于异常：分析型 Skill 的 findings 可以只是筛选或搜索结果；"
+    "只有审计型 Skill 的 outcome=fail/warning 或明确异常字段才能写成异常。"
+    "因子被筛选只证明它在给定样本和方法下被选中；除非证据明确提供对应指标，"
+    "不得扩展为方向信号、短期动量、预测能力、跨期稳定性、因果机制、宏观风格或可交易性。"
+    "参数搜索分数只描述给定验证流程，不等于独立确认、稳定有效或已经证实过拟合。"
+    "流动性压力测试只适用于给定持仓、价差、参与率与期限假设，不能外推为宏观环境结论。"
+)
 
 
 class MockLLM:
@@ -47,7 +60,7 @@ class MockLLM:
         # Distinct voice per side so even offline the six agents sound like people,
         # not one template. (Real openai mode gets these voices via system prompts.)
         if side == "bull":
-            return f"我看好 {symbol}——{joined}，这些信号都往同一个方向指。别只盯着风险，机会也是证据说了算。"
+            return f"从上行角度看 {symbol}——{joined}。这些结果提供了讨论线索，但不自动等于方向或预测信号。"
         if side == "bear":
             return f"先别急着乐观。{symbol} 有几处我一直盯着的隐患：{joined}。上涨的故事得先过得了这几关。"
         if side == "macro":
@@ -66,6 +79,53 @@ class MockLLM:
         """Keep the streaming contract available in offline mode."""
 
         yield self.argue(side=side, symbol=symbol, evidence=evidence)
+
+    def rebut(
+        self,
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+        own_claim: dict[str, Any],
+        targets: list[dict[str, Any]],
+        target_verdicts: list[dict[str, Any]],
+    ) -> str:
+        target_ids = "、".join(str(item["id"]) for item in targets)
+        verdict_by_id = {
+            str(item["claim_id"]): str(item["status"])
+            for item in target_verdicts
+        }
+        statuses = "、".join(
+            f"{item['id']}={verdict_by_id.get(str(item['id']), '未审计')}"
+            for item in targets
+        )
+        summaries = "；".join(
+            str(item.get("summary", "")) for item in evidence if item.get("summary")
+        )
+        return (
+            f"回应 {target_ids}：对方结论成立的前提需要与已集成证据一致。"
+            f"目前审计状态为 {statuses}；我的依据是 {summaries or '现有 Skill 结果'}。"
+            "若该前提经审计成立，我承认对方这一点；否则不能据此扩大结论。"
+        )
+
+    def rebut_stream(
+        self,
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+        own_claim: dict[str, Any],
+        targets: list[dict[str, Any]],
+        target_verdicts: list[dict[str, Any]],
+    ) -> Iterator[str]:
+        yield self.rebut(
+            side=side,
+            symbol=symbol,
+            evidence=evidence,
+            own_claim=own_claim,
+            targets=targets,
+            target_verdicts=target_verdicts,
+        )
 
     def audit_reason(self, *, status: str, symbol: str, detail: dict[str, Any]) -> str:
         findings = [
@@ -193,9 +253,8 @@ class OpenAICompatLLM:
             f"你是投资辩论庭中的「{p['name']}」。风格：{p['voice']}。"
             "只解释给定的 Skill 结果。不得补写未提供的指标、来源或 Skill 调用。"
             "严禁给出买入/卖出/目标价/收益承诺；你是在帮小白理解，不是荐股。"
-            "证据里的 status 只表示 Skill 是否成功执行，outcome 才是领域检查的 pass/fail/warning。"
+            f"{_EVIDENCE_INTERPRETATION}"
             "rows 是输入观察行数，不是公司行动或异常数量；finding_count 才是发现数量。"
-            "outcome=fail 或存在 findings 时必须明确说明异常，绝不能写成全部验证通过。"
             "outcome=fail 的证据不能被包装成多头支撑，只能说明风险、异常和待核对项。"
             "不得猜测异常由分红、拆股、配股等具体事件造成，也不得把少量异常升级成系统性偏差；"
             "除非证据明确给出原因或范围。数据异常不等同于公司基本面利空。"
@@ -223,6 +282,95 @@ class OpenAICompatLLM:
             side=side,
             symbol=symbol,
             evidence=evidence,
+        )
+        yield from self._chat_stream(system, user)
+
+    @staticmethod
+    def _rebut_prompt(
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+        own_claim: dict[str, Any],
+        targets: list[dict[str, Any]],
+        target_verdicts: list[dict[str, Any]],
+    ) -> tuple[str, str]:
+        p = PERSONAS[side]
+        system = (
+            f"你是投资辩论庭中的「{p['name']}」，正在进行第二轮定向交叉质询。"
+            f"风格：{p['voice']}。必须点名回应具体 claim_id，并指出对方论证依赖的具体前提；"
+            "可以明确承认对方论据成立。不得只复述自己的首轮陈述。"
+            "必须忠实引用或紧贴对方原文中的一个具体前提；对方没有主张的动量、因果、"
+            "宏观环境或可交易性，不得擅自安到对方头上。"
+            "只能使用给定的、已集成 QuantSkills 证据，不得补写数据、指标、来源或 Skill 调用，"
+            "也不得把审计未通过写成已通过。严禁给出买卖建议、目标价或收益承诺。"
+            f"{_EVIDENCE_INTERPRETATION}"
+            "用简体中文，2~4 句，先回应对方，再说明该回应如何改变或保留分歧。"
+        )
+        verdict_by_id = {
+            str(item.get("claim_id")): item
+            for item in target_verdicts
+            if item.get("claim_id")
+        }
+        target_material = [
+            {
+                "claim_id": target.get("id"),
+                "agent": target.get("agent"),
+                "side": target.get("side"),
+                "text": target.get("text"),
+                "audit": verdict_by_id.get(str(target.get("id")), {
+                    "status": "not_audited",
+                }),
+            }
+            for target in targets
+        ]
+        user = (
+            f"标的：{symbol}\n"
+            f"自己的首轮陈述：\n{json.dumps(own_claim, ensure_ascii=False, indent=2)}\n"
+            f"需要回应的对手原文及审计状态：\n"
+            f"{json.dumps(target_material, ensure_ascii=False, indent=2)}\n"
+            f"本轮允许引用的 QuantSkills 证据：\n"
+            f"{json.dumps(evidence, ensure_ascii=False, indent=2)}"
+        )
+        return system, user
+
+    def rebut(
+        self,
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+        own_claim: dict[str, Any],
+        targets: list[dict[str, Any]],
+        target_verdicts: list[dict[str, Any]],
+    ) -> str:
+        system, user = self._rebut_prompt(
+            side=side,
+            symbol=symbol,
+            evidence=evidence,
+            own_claim=own_claim,
+            targets=targets,
+            target_verdicts=target_verdicts,
+        )
+        return self._chat(system, user)
+
+    def rebut_stream(
+        self,
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+        own_claim: dict[str, Any],
+        targets: list[dict[str, Any]],
+        target_verdicts: list[dict[str, Any]],
+    ) -> Iterator[str]:
+        system, user = self._rebut_prompt(
+            side=side,
+            symbol=symbol,
+            evidence=evidence,
+            own_claim=own_claim,
+            targets=targets,
+            target_verdicts=target_verdicts,
         )
         yield from self._chat_stream(system, user)
 

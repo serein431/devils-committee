@@ -67,6 +67,8 @@
   .cmd .icon-btn:hover:not(:disabled){color:var(--ink);border-color:var(--accent)}
   .cmd .icon-btn.on{color:#04181c;background:var(--accent);border-color:var(--accent)}
   .cmd .icon-btn.listening{color:#fff;background:var(--crit);border-color:var(--crit);animation:micListen 1.15s infinite}
+  .cmd .secondary{color:var(--ink);background:var(--panel2);border:1px solid var(--line2)}
+  .cmd .secondary:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
   .voice-status{min-height:16px;margin:0 auto 4px;text-align:center;color:var(--sub);font-family:var(--sans);font-size:11px}
   .voice-status.error{color:var(--serious)}
   @keyframes micListen{0%,100%{box-shadow:0 0 0 0 rgba(255,59,92,.38)}50%{box-shadow:0 0 0 5px rgba(255,59,92,0)}}
@@ -214,6 +216,8 @@
   .agent .ah{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--panel2)}
   .agent .tag{font-weight:700;letter-spacing:1px;font-size:12px}
   .agent .zh{color:var(--sub);font-size:11px}
+  .agent .reply{font-size:10px;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
+    border-radius:3px;padding:1px 6px;white-space:nowrap}
   .agent .conf{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--sub);font-size:11px}
   .agent .side-dot{width:8px;height:8px;border-radius:2px;flex:none}
   .abody{padding:11px 12px}
@@ -356,6 +360,7 @@
         <button id="voiceInput" class="icon-btn" type="button" aria-label="开始语音输入" title="开始语音输入">🎙</button>
         <button id="voiceOutput" class="icon-btn" type="button" aria-label="关闭自动播报" title="关闭自动播报" aria-pressed="true">🔊</button>
         <button id="go">开庭 ⏎</button>
+        <button id="newQuestion" class="secondary hidden" type="button">新提问</button>
       </div>
       <div class="voice-status" id="voiceStatus" aria-live="polite"></div>
       <div class="chips" id="chips"></div>
@@ -664,7 +669,7 @@ function startVoiceInput(retrying=false){
 }
 
 const STA={selection_bias:["选择偏差","SELECTION-BIAS","crit"],suspected_overfit:["过拟合","OVERFIT","serious"],
-  bad_data:["坏数据","BAD-DATA","serious"],thin_data:["样本不足","THIN-DATA","warn"],
+  bad_data:["坏数据","BAD-DATA","serious"],thin_data:["验证不足","INCONCLUSIVE","warn"],
   missing_evidence:["资料缺失","MISSING-EVIDENCE","warn"],pass:["通过","PASS","good"]};
 const SEV={none:0,low:.34,medium:.67,high:1};
 
@@ -894,6 +899,7 @@ function querySymbol(value){
 function resetConversation(){
   conversationRoot="";conversationSymbol="";conversationHistory=[];conversationRound=0;activeQuestion="";
   $("#go").textContent="开庭 ⏎";
+  $("#newQuestion").classList.add("hidden");
   $("#q").placeholder="输入 A 股研究问题，如：600519.SH 的复权、分红、因子和流动性风险";
 }
 function conversationTopic(question){
@@ -919,6 +925,7 @@ function rememberConversation(result){
   conversationSymbol=(result.meta||{}).symbol||conversationSymbol;
   $("#q").value="";$("#q").placeholder="继续追问，四个研究 Agent 会结合前文回答";
   $("#go").textContent="追问 ⏎";
+  $("#newQuestion").classList.remove("hidden");
 }
 
 function handleEvent(ev){
@@ -931,7 +938,11 @@ function handleEvent(ev){
     case "argue":
       $("#bSym").textContent=ev.symbol||"—";$("#bLive").textContent="LIVE";
       lightPipe("argue");setStage("四个 Agent 就该标的并行取证",true);return;
-    case "claim_start":startStageStream(ev);setStage(`${(SIDE[ev.side]||[ev.agent])[0]} 正在陈述详细论据`,true);return;
+    case "rebut":
+      returnStagePlayers("首轮审计完成 · 交叉质询中");
+      setStage(ev.msg||"四个 Agent 正在定向回应对方论据",true);return;
+    case "claim_start":startStageStream(ev);setStage(
+      `${(SIDE[ev.side]||[ev.agent])[0]} ${ev.kind==="rebuttal"?"正在回应对方":"正在陈述详细论据"}`,true);return;
     case "claim_delta":return appendStageStream(ev);
     case "claim":{
       const el=renderAgent(ev);$("#debate").appendChild(el);requestAnimationFrame(()=>el.classList.add("in"));
@@ -960,6 +971,8 @@ function handleEvent(ev){
 function renderAgent(c){
   const side=avatarSide(c.side),[tag,zh]=SIDE[side]||[c.agent,""];
   const conf=Math.round((c.confidence||.5)*100);
+  const targets=(c.responds_to||[]).map(esc).join(" / ");
+  const reply=c.kind==="rebuttal"?`<span class="reply">REBUTTAL → ${targets||"—"}</span>`:"";
   const metrics=[];(c.evidence||[]).forEach(e=>Object.entries(e.metrics||{}).forEach(([k,v])=>{
     if(!metrics.find(m=>m[0]===k))metrics.push([k,v]);}));
   const viz=metrics.slice(0,5).map(([k,v])=>metricRow(k,v)).join("");
@@ -969,6 +982,7 @@ function renderAgent(c){
   d.innerHTML=`<div class="ah">
       <span class="side-dot" style="background:${C[side]||'var(--accent)'}"></span>
       <span class="tag" style="color:${C[side]||'var(--ink)'}">${esc(tag)}</span><span class="zh">${esc(zh)}</span>
+      ${reply}
       <span class="conf">CONF <span class="num" style="color:${C[side]}">${conf}</span></span>
       <span class="stamp scan" id="${stampDomId(c.id)}">⟳ 审计中</span></div>
     <div class="abody">
@@ -1071,7 +1085,7 @@ async function run(){
   if(!followUp){conversationRoot=q;conversationSymbol=nextSymbol;conversationHistory=[];}
   conversationRound=conversationHistory.length+1;activeQuestion=q;
   const requestTopic=conversationTopic(q);
-  researchRunning=true;voiceSubmitQueued=false;$("#go").disabled=true;updateRecognitionButton();
+  researchRunning=true;voiceSubmitQueued=false;$("#go").disabled=true;$("#newQuestion").disabled=true;updateRecognitionButton();
   if(recognitionActive&&recognition){recognitionFailed=true;try{recognition.abort();}catch(_){}}
   flags=0;beginStageDebate();
   queueStageTurn({side:"chair",text:"开庭，委员会开始研究。",speechText:"开庭。委员会开始研究。"},"speaking","system");
@@ -1104,8 +1118,13 @@ async function run(){
       finishStageDebate();setStage("研究请求失败，请稍后重试。",false);setVoiceStatus("研究请求失败，请稍后重试",true);
     }
   }finally{
-    researchRunning=false;$("#go").disabled=false;updateRecognitionButton();
+    researchRunning=false;$("#go").disabled=false;$("#newQuestion").disabled=!conversationHistory.length;updateRecognitionButton();
   }
+}
+
+function runNewQuestion(){
+  if(!$("#q").value.trim()||researchRunning)return;
+  resetConversation();run();
 }
 
 /* view toggle */
@@ -1122,7 +1141,8 @@ const EX=[
 ];
 const chips=$("#chips");EX.forEach(e=>{const c=document.createElement("span");c.className="chip";c.textContent=e;
   c.onclick=()=>{$("#q").value=e;run();};chips.appendChild(c);});
-$("#go").onclick=run;$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")run();});
+$("#go").onclick=run;$("#newQuestion").onclick=runNewQuestion;
+$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")run();});
 $("#voiceInput").onclick=()=>startVoiceInput(false);
 $("#voiceOutput").onclick=()=>setVoiceOutput(!voiceOutputEnabled);
 $("#voicePause").onclick=toggleSpeechPause;

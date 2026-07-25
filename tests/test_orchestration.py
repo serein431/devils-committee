@@ -9,8 +9,10 @@ from backend.orchestration import (
     MAX_AUDIT_ROUNDS,
     PER_AGENT_TIMEOUT_SEC,
     DebateOrchestrator,
+    _build_rebuttal_targets,
     _extract_symbol,
 )
+from backend.models import AuditVerdict, Claim
 from backend.research_request import ResearchRequest
 from backend.skills.runner import SkillRunner
 
@@ -25,7 +27,7 @@ def test_extract_symbol_keeps_a_share_support_boundary():
 def test_budget_is_ten_minutes_with_two_minute_agent_limit():
     assert GLOBAL_BUDGET_SEC == 600
     assert PER_AGENT_TIMEOUT_SEC == 120
-    assert MAX_AUDIT_ROUNDS == 1
+    assert MAX_AUDIT_ROUNDS == 2
 
 
 def test_prepare_runs_once_for_all_agents(monkeypatch, evidence_fixture):
@@ -45,6 +47,8 @@ def test_prepare_runs_once_for_all_agents(monkeypatch, evidence_fixture):
         "macro",
         "risk",
     }
+    assert len(result.claims) == 8
+    assert {claim.round for claim in result.claims} == {1, 2}
     assert result.meta["data_status"] == "success"
 
 
@@ -315,6 +319,127 @@ def test_four_research_agents_run_concurrently(monkeypatch, evidence_fixture):
     assert peak == 4
 
 
+def test_four_rebuttals_run_concurrently(monkeypatch, evidence_fixture):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    active = 0
+    peak = 0
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    orchestrator = DebateOrchestrator()
+    for agent in (
+        orchestrator.bull,
+        orchestrator.bear,
+        orchestrator.macro,
+        orchestrator.risk,
+    ):
+        original = agent.rebut
+
+        async def concurrent_rebut(*args, _original=original, **kwargs):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return await _original(*args, **kwargs)
+
+        monkeypatch.setattr(agent, "rebut", concurrent_rebut)
+
+    result = asyncio.run(orchestrator.run("600519 多空"))
+
+    assert peak == 4
+    assert len([claim for claim in result.claims if claim.round == 2]) == 4
+
+
+def test_rebuttal_graph_and_second_audit_only_cover_new_claims(
+    monkeypatch,
+    evidence_fixture,
+):
+    evidence_fixture.results[
+        "skill-corporate-action-adjustment-auditor"
+    ].outcome = "fail"
+
+    async def prepare(self, request):
+        return evidence_fixture
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    orchestrator = DebateOrchestrator()
+    audit_calls = []
+    original_audit = orchestrator.audit.audit
+
+    async def track_audit(evidence, claims):
+        audit_calls.append([claim.id for claim in claims])
+        return await original_audit(evidence, claims)
+
+    monkeypatch.setattr(orchestrator.audit, "audit", track_audit)
+    result = asyncio.run(orchestrator.run("600519 多空"))
+
+    by_id = {claim.id: claim for claim in result.claims}
+    assert set(by_id) == {
+        "bull-1", "bear-1", "macro-1", "risk-1",
+        "bull-2", "bear-2", "macro-2", "risk-2",
+    }
+    assert by_id["bull-2"].responds_to == ["bear-1"]
+    assert by_id["bear-2"].responds_to == ["bull-1"]
+    assert by_id["macro-2"].responds_to == ["bull-1", "bear-1"]
+    # Bull is hard-failed by the first audit, so Risk takes the next stable tie.
+    assert by_id["risk-2"].responds_to == ["bear-1"]
+    assert len(audit_calls) == 2
+    assert set(audit_calls[0]) == {
+        "bull-1", "bear-1", "macro-1", "risk-1",
+    }
+    assert set(audit_calls[1]) == {
+        "bull-2", "bear-2", "macro-2", "risk-2",
+    }
+
+
+def test_risk_target_falls_back_to_stable_highest_when_all_hard_fail():
+    orchestrator = DebateOrchestrator()
+    agents = [
+        orchestrator.bull,
+        orchestrator.bear,
+        orchestrator.macro,
+        orchestrator.risk,
+    ]
+    claims = [
+        Claim("bull-1", "Bull", "bull", "bull", confidence=0.4),
+        Claim("bear-1", "Bear", "bear", "bear", confidence=0.7),
+        Claim("macro-1", "Macro", "macro", "macro", confidence=0.7),
+        Claim("risk-1", "Risk", "risk", "risk", confidence=0.9),
+    ]
+    verdicts = [
+        AuditVerdict(claim.id, "bad_data", "failed")
+        for claim in claims[:3]
+    ]
+
+    graph = _build_rebuttal_targets(agents, claims, verdicts)
+    risk_targets = next(item[2] for item in graph if item[0].side == "risk")
+
+    assert [claim.id for claim in risk_targets] == ["bear-1"]
+
+
+def test_one_rebuttal_failure_does_not_block_other_agents(
+    monkeypatch,
+    evidence_fixture,
+):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("private rebuttal detail")
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    orchestrator = DebateOrchestrator()
+    monkeypatch.setattr(orchestrator.bull, "rebut", broken)
+    result = asyncio.run(orchestrator.run("600519 多空"))
+
+    assert {claim.id for claim in result.claims if claim.round == 2} == {
+        "bear-2", "macro-2", "risk-2",
+    }
+    assert "private rebuttal detail" not in repr(result.to_dict())
+
+
 def test_debate_audits_each_shared_evidence_claim(monkeypatch, evidence_fixture):
     async def prepare(self, request):
         return evidence_fixture
@@ -367,6 +492,18 @@ def test_stream_emits_detailed_claim_text_as_ordered_deltas(
     for claim_id, claim in claims.items():
         assert "".join(streamed[claim_id]) == claim["text"]
         assert claim["plain"] not in "".join(streamed[claim_id])
+        matching = [
+            event
+            for event in events
+            if event.get("id") == claim_id
+            and event.get("stage") in {"claim_start", "claim_delta", "claim"}
+        ]
+        assert all(event["kind"] == claim["kind"] for event in matching)
+        assert all(event["round"] == claim["round"] for event in matching)
+        assert all(event["responds_to"] == claim["responds_to"] for event in matching)
+
+    rebut_stage = next(event for event in events if event.get("stage") == "rebut")
+    assert rebut_stage["round"] == 2
 
 
 def test_stream_forwards_llm_deltas_in_speaker_order(

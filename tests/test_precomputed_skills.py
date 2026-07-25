@@ -116,7 +116,9 @@ def test_matching_hpo_report_loads_as_precomputed(tmp_path):
     )
 
     assert result.status == "success"
-    assert result.findings[0].claim == "validated parameter set with score 0.123"
+    assert result.findings[0].claim == (
+        "parameter search selected a set with validation score 0.123"
+    )
     assert result.findings[0].confidence == 0.8
 
 

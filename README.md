@@ -1,6 +1,6 @@
 # 反方 · The Devil's Committee
 
-一个面向投资研究初学者的多智能体辩论工具。Bull、Bear、Macro、Risk 四个 Agent 阅读同一批证据并分别陈述，Audit Agent 检查选择偏差、公司行动复权、流动性、指数权重变化和模型过拟合，Chair 只汇总共识、分歧与风险范围。
+一个面向投资研究初学者的多智能体辩论工具。Bull、Bear、Macro、Risk 四个 Agent 阅读同一批证据并行陈述，Audit Agent 检查选择偏差、公司行动复权、流动性、指数权重变化和模型过拟合；初审后四方针对具体对手论据进行一轮定向交叉质询，Audit 复审回应，Chair 再汇总共识、分歧与风险范围。
 
 项目不给买卖指令、目标价、收益承诺，也不执行自动交易。输出仅供学习与研究。
 
@@ -84,11 +84,15 @@ A2A 请求
           ├─ 四个在线 QuantSkills（每个最多 120 秒）
           ├─ 项目内指数权重变化研究
           └─ HPO precomputed 报告（因子研究可在失败时读取预计算报告）
-              └─ Bull / Bear / Macro / Risk 并行陈述（单个 Agent 最多 120 秒）
-                  └─ Audit 独立检查
-                      └─ Chair 汇总
-                          └─ compliance 检查后返回 JSON 或 SSE
+              └─ Bull / Bear / Macro / Risk 首轮并行陈述（单个 Agent 最多 120 秒）
+                  └─ Audit 独立初审
+                      └─ 四方针对具体论据并行定向回应
+                          └─ Audit 复审回应
+                              └─ Chair 根据陈述、回应与审计结果汇总
+                                  └─ compliance 检查后返回 JSON 或 SSE
 ```
+
+交叉质询只有一轮，不会重复获取数据或运行 QuantSkills。`Claim` 在原有响应字段之外新增兼容字段：`kind` 区分首轮陈述与回应，`round` 标记轮次，`responds_to` 指向被回应的论据 ID；现有客户端可继续忽略这些新增字段。
 
 整个请求限制为 600 秒。SSE 会持续发送阶段事件，但不会改变同一请求的时间限制。
 

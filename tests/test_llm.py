@@ -77,6 +77,9 @@ def test_argue_builds_persona_system_and_evidence_user(monkeypatch):
     system, user = body["messages"][0]["content"], body["messages"][1]["content"]
     assert llm.PERSONAS["bull"]["name"] in system
     assert "买入" in system or "荐股" in system    # persona forbids buy/sell advice
+    assert "outcome=null 是正常值" in system
+    assert "不得扩展为方向信号" in system
+    assert "findings 本身不等于异常" in system
     assert "600519.SH" in user
     assert "skill-factor-ranking-sage" in user     # evidence JSON is passed through
 

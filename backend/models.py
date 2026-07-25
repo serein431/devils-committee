@@ -120,6 +120,9 @@ class Claim:
     plain: str = ""                  # jargon-free one-liner for beginners (15 命门)
     evidence: list[Evidence] = field(default_factory=list)
     skills_used: list[str] = field(default_factory=list)
+    kind: Literal["position", "rebuttal"] = "position"
+    round: int = 1
+    responds_to: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

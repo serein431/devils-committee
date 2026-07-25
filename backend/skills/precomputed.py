@@ -113,7 +113,7 @@ def parse_precomputed_findings(
         return [
             SkillFinding(
                 claim=(
-                    "validated parameter set with score "
+                    "parameter search selected a set with validation score "
                     f"{metrics['validation_score']}"
                 ),
                 evidence_refs=[
