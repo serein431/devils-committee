@@ -46,7 +46,7 @@ git submodule update --init --recursive
 - [x] 公网服务地址：`https://devils.corvusapi.org`。
 - [x] systemd 进程守护、健康检查和 Caddy HTTPS：已实测。
 - [x] 公网 Agent Card、A2A 普通调用和 SSE：已实测；当前公开访问，不要求 Bearer。
-- [x] `scripts/smoke_a2a.py` 已更新为 A2A v1 的 16 项检查。
+- [x] `scripts/smoke_a2a.py` 已更新为 A2A v1 的 17 项检查。
 - [ ] 代码仓库提交地址：`需人工填写`。
 - [ ] 评审账号或仓库访问权限：`需人工确认`。
 

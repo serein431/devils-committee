@@ -19,7 +19,7 @@
 ## 测了什么（67 项自动化检查）
 - 后端 `pytest`：54 项，**91% 覆盖**——合规 / 端到端 / ≥3 示例 / 真实 skill CLI / LLM 单元+全链路集成 / 数据缓存 / panda 灵活解析 / 服务健壮性 / 安全（鉴权/错误脱敏/XSS）/ 配置解析 / 审计边界（thin_data）。
 - 前端 `./scripts/test_frontend.sh`：24 项（jsdom）——渲染 / 数据可视化 SVG / 审计标红+严重度环 / REAL provenance 徽章 / XSS 转义 / diverging 分歧地图 / 双视图。
-- 公网就绪：`scripts/smoke_a2a.py --url https://devils.corvusapi.org` 16 项（对运行中服务发真实 HTTP）。
+- 公网就绪：`scripts/smoke_a2a.py --url https://devils.corvusapi.org` 17 项（对运行中服务发真实 HTTP）。
 
 ## offline→real 已排的雷（拿凭证切换时不会踩）
 `.env` 行内注释被当值 · LLM 响应异常崩溃 · LLM 全链路未验 · panda 列名写死/空结果崩 · `sh600519`/`BUY` 输入识别错 · 前端 XSS · 鉴权时序 · 错误泄露内部路径。**均已修 + 测试锁定。**
