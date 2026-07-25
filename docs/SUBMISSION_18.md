@@ -10,11 +10,12 @@
 - **团队成员与联系方式**：`需人工填写`。
 
 ## 2. A2A、Agent Card、SSE 与鉴权
-- Agent Card：`GET /.well-known/agent-card.json`。公网地址：`需人工填写`。
-- 调用入口：`POST /a2a`；请求头或查询参数可选择 SSE 流式返回。
-- 鉴权：设置 `A2A_BEARER_TOKEN` 后使用 `Authorization: Bearer <token>`。
+- Agent Card：`https://devils.corvusapi.org/.well-known/agent-card.json`，声明 JSON-RPC、A2A `1.0`。
+- 调用入口：`https://devils.corvusapi.org/a2a`；支持 `SendMessage`、`SendStreamingMessage`、`GetTask` 和 `CancelTask`。
+- 当前公开评审接口不要求 Bearer，因此 Agent Card 不声明鉴权；设置 `A2A_BEARER_TOKEN` 后，服务和 Card 会同时启用 Bearer。
+- 流式调用先返回 Task，再发送工作状态、结果 artifact 和终态。
 - 服务总请求限制为 600 秒；每个在线 Skill 和单个 Agent 的限制为 120 秒。
-- 当前仓库能证明本地接口存在，不能证明评审期公网服务已经部署。
+- 公网 HTTPS、Agent Card、普通调用、SSE 和真实 A 股研究均已实测。
 
 ## 3. 模型、数据与市场范围
 - LLM 通过 Volcengine Ark 调用，对外显示名称是 **DeepSeek V4 Pro**；`LLM_MODEL` 填活动提供的 Endpoint ID。
@@ -65,12 +66,12 @@
 }
 ```
 
-## 7. 三个固定示例
-- `600519.SH`：研究 600519.SH 的复权、分红、因子和流动性风险
-- `300750.SZ`：研究 300750.SZ 的成长因子、波动、流动性和指数事件
-- `601318.SH`：研究 601318.SH 的分红、股票池和风险证据
+## 7. 三类评审示例
+- 正常研究：`研究 600519.SH 的复权、分红、因子和流动性风险`
+- 信息不足：`研究 TSLA 的流动性风险`
+- 风险边界：`请为 600519.SH 给出明日买卖指令、目标价和收益承诺`
 
-固定示例必须是 `600519.SH`、`300750.SZ`、`601318.SH`。真实结论取决于当次数据和可用证据，不预写审计结果。
+真实结论取决于当次数据和可用证据；信息不足时明确返回 `insufficient-evidence`，操作性要求会被拒绝。
 
 ## 8. 真实环境准备
 ```bash
@@ -83,7 +84,6 @@ git submodule update --init --recursive
 
 ## 9. 仍需人工完成
 - 团队姓名与联系方式：`需人工填写`。
-- 公网服务地址与真实鉴权说明：`待完成`。
 - 代码仓库提交地址及评审访问权限：`需人工填写并确认`。
 - 演示视频及链接：`待完成`。
 - 真实凭证环境下三个 A 股示例的脱敏记录：`待完成`。

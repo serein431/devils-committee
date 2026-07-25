@@ -8,7 +8,7 @@
 调用方
   ├─ GET /.well-known/agent-card.json
   ├─ GET /healthz
-  └─ POST /a2a ── Bearer 鉴权可选 ── JSON 或 SSE
+  └─ POST /a2a ── Bearer 鉴权可选 ── A2A v1 JSON-RPC 或 SSE
          │
          ▼
   ResearchRequest：解析 A 股代码和研究参数
@@ -30,10 +30,10 @@
          ▼
   compliance.py 移除操作性表述并附风险提示
          ▼
-  A2A JSON / SSE / 教练页面
+  SendMessage / SendStreamingMessage / GetTask / CancelTask / 教练页面
 ```
 
-整个请求限制为 600 秒。SSE 只负责发送阶段事件，不会放宽时间限制。
+整个请求限制为 600 秒。长研究使用 Task；SSE 先发送提交状态，再发送工作状态、结果 artifact 和终态。任务可通过 `GetTask` 查询，未结束任务可通过 `CancelTask` 取消。
 
 ## 六个 Skill
 
@@ -71,7 +71,7 @@ PandaData 缓存键包含方法、参数、SDK 版本和数据版本。保存 Pa
 
 ## 模型与接口
 
-LLM 使用 Volcengine Ark 的 OpenAI 兼容接口。显示名称是 **DeepSeek V4 Pro**，`LLM_MODEL` 填活动提供的 Endpoint ID。A2A 服务公开 Agent Card，支持 SSE；设置 `A2A_BEARER_TOKEN` 后必须使用 Bearer 鉴权。
+LLM 使用 Volcengine Ark 的 OpenAI 兼容接口。显示名称是 **DeepSeek V4 Pro**，`LLM_MODEL` 填活动提供的 Endpoint ID。Agent Card 声明 JSON-RPC 和 A2A `1.0`。公开环境未设置 `A2A_BEARER_TOKEN` 时不声明鉴权；设置后服务和 Card 同时启用 Bearer。
 
 ## 合规限制
 

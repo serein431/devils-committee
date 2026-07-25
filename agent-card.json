@@ -1,19 +1,25 @@
 {
   "name": "Devil's Committee — AI Investment Debate Coach",
   "description": "A multi-agent A-share research coach that explains evidence, audits data and model risks, and never gives buy or sell instructions.",
-  "version": "0.2.0",
-  "url": "http://localhost:8080/a2a",
+  "supportedInterfaces": [
+    {
+      "url": "http://localhost:8080/a2a",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
   "provider": {
     "organization": "Team ADVX2026",
     "url": "https://github.com/serein431/devils-committee"
   },
+  "version": "1.0.1",
   "documentationUrl": "https://github.com/serein431/devils-committee/blob/main/README.md",
-  "defaultInputModes": ["text/plain", "application/json"],
-  "defaultOutputModes": ["application/json", "text/plain"],
   "capabilities": {
     "streaming": true,
     "pushNotifications": false
   },
+  "defaultInputModes": ["text/plain", "application/json"],
+  "defaultOutputModes": ["application/json", "text/plain"],
   "skills": [
     {
       "id": "debate_case",
@@ -22,29 +28,11 @@
       "tags": ["a-share", "multi-agent", "research", "audit", "education"],
       "examples": [
         "研究 600519.SH 的复权、分红、因子和流动性风险",
-        "研究 300750.SZ 的成长因子、波动、流动性和指数事件",
-        "研究 601318.SH 的分红、股票池和风险证据"
+        "研究 TSLA 的流动性风险",
+        "请为 600519.SH 给出明日买卖指令、目标价和收益承诺"
       ],
       "inputModes": ["text/plain", "application/json"],
-      "outputModes": ["application/json", "text/plain"],
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "skill": {"const": "debate_case"},
-          "topic": {"type": "string"},
-          "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SH|SZ)$"},
-          "question": {"type": "string"},
-          "start_date": {"type": "string", "pattern": "^[0-9]{8}$"},
-          "end_date": {"type": "string", "pattern": "^[0-9]{8}$"},
-          "portfolio_value": {"type": "number", "minimum": 0},
-          "spread_bps": {"type": "number", "minimum": 0}
-        },
-        "anyOf": [
-          {"required": ["topic"]},
-          {"required": ["question"]}
-        ],
-        "additionalProperties": true
-      }
+      "outputModes": ["application/json", "text/plain"]
     },
     {
       "id": "audit_claims",
@@ -52,34 +40,10 @@
       "description": "Research an A-share question and independently audit its generated claims for model, selection, data and evidence risks. Missing evidence is reported as insufficient rather than passed.",
       "tags": ["a-share", "audit", "model-risk", "data-risk", "evidence"],
       "examples": [
-        "审计 600519.SH 的复权、分红、因子和流动性证据",
-        "审计 300750.SZ 的成长因子、波动和指数事件证据",
-        "审计 601318.SH 的分红、股票池和风险证据"
+        "审计 600519.SH 的复权、分红、因子和流动性证据"
       ],
       "inputModes": ["text/plain", "application/json"],
-      "outputModes": ["application/json", "text/plain"],
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "skill": {"const": "audit_claims"},
-          "topic": {"type": "string"},
-          "symbol": {"type": "string", "pattern": "^[0-9]{6}\\.(SH|SZ)$"},
-          "question": {"type": "string"},
-          "start_date": {"type": "string", "pattern": "^[0-9]{8}$"},
-          "end_date": {"type": "string", "pattern": "^[0-9]{8}$"},
-          "portfolio_value": {"type": "number", "minimum": 0},
-          "spread_bps": {"type": "number", "minimum": 0}
-        },
-        "anyOf": [
-          {"required": ["topic"]},
-          {"required": ["question"]}
-        ],
-        "additionalProperties": true
-      }
+      "outputModes": ["application/json", "text/plain"]
     }
-  ],
-  "securitySchemes": {
-    "bearer": {"type": "http", "scheme": "bearer"}
-  },
-  "security": [{"bearer": []}]
+  ]
 }

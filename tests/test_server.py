@@ -1,9 +1,11 @@
 """A2A server robustness — track 18's #1 disqualifier is the service falling over
 (掉线 / 超时 / 调不到). These lock down: endpoints respond, bad input is handled,
 auth works, and one failing agent degrades instead of 500-ing the whole debate."""
+import asyncio
 import dataclasses
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend import a2a_server
@@ -11,6 +13,19 @@ from backend.config import CONFIG
 from backend.models import DebateResult
 
 client = TestClient(a2a_server.app)
+
+
+@pytest.fixture(autouse=True)
+def _clear_a2a_task_state():
+    for name in ("_TASKS", "_TASK_RUNNERS"):
+        store = getattr(a2a_server, name, None)
+        if store is not None:
+            store.clear()
+    yield
+    for name in ("_TASKS", "_TASK_RUNNERS"):
+        store = getattr(a2a_server, name, None)
+        if store is not None:
+            store.clear()
 
 
 def _minimal_result(symbol: str) -> DebateResult:
@@ -47,22 +62,53 @@ def test_agent_card_served_and_url_injected():
     r = client.get("/.well-known/agent-card.json")
     assert r.status_code == 200
     card = r.json()
-    assert card["url"].endswith("/a2a")
+    assert card["supportedInterfaces"][0]["url"].endswith("/a2a")
     assert card["documentationUrl"] == (
         f"{CONFIG.repository_url.rstrip('/')}/blob/main/README.md"
     )
     assert {s["id"] for s in card["skills"]} == {"debate_case", "audit_claims"}
 
 
-def test_agent_card_has_three_a_share_examples_and_no_placeholder():
+def test_agent_card_has_normal_insufficient_and_risk_boundary_examples():
     card = client.get("/.well-known/agent-card.json").json()
     rendered = json.dumps(card, ensure_ascii=False)
     assert "600519.SH" in rendered
-    assert "300750.SZ" in rendered
-    assert "601318.SH" in rendered
-    for removed in ("NV" + "DA", "TS" + "LA", "AA" + "PL"):
-        assert removed not in rendered
+    assert "TSLA" in rendered
+    assert "明日买卖指令" in rendered
     assert "your-host" not in rendered and "your-repo" not in rendered
+
+
+def test_agent_card_declares_a2a_v1_jsonrpc_and_public_auth_consistently():
+    card = client.get("/.well-known/agent-card.json").json()
+
+    assert card["supportedInterfaces"] == [{
+        "url": f"{CONFIG.public_url.rstrip('/')}/a2a",
+        "protocolBinding": "JSONRPC",
+        "protocolVersion": "1.0",
+    }]
+    assert "url" not in card
+    assert "securitySchemes" not in card
+    assert "securityRequirements" not in card
+    rendered = json.dumps(card, ensure_ascii=False)
+    assert "研究 TSLA 的流动性风险" in rendered
+    assert "明日买卖指令" in rendered
+
+
+def test_agent_card_declares_bearer_only_when_service_enforces_it(monkeypatch):
+    monkeypatch.setattr(
+        a2a_server,
+        "CONFIG",
+        dataclasses.replace(CONFIG, bearer_token="secret"),
+    )
+
+    card = client.get("/.well-known/agent-card.json").json()
+
+    assert card["securitySchemes"]["bearer"] == {
+        "httpAuthSecurityScheme": {"scheme": "Bearer"}
+    }
+    assert card["securityRequirements"] == [
+        {"schemes": {"bearer": {"list": []}}}
+    ]
 
 
 def test_debate_case_returns_result():
@@ -288,3 +334,214 @@ def test_a2a_jsonrpc_audit_claims_stream_stays_sse(monkeypatch):
     assert event["id"] == request_id
     assert event["result"]["kind"] == "message"
     assert "601318.SH" in event["result"]["parts"][0]["text"]
+
+
+def _v1_request(method: str, text: str, *, configuration: dict | None = None) -> dict:
+    params = {
+        "message": {
+            "messageId": f"input-{method}",
+            "role": "ROLE_USER",
+            "parts": [{"text": text}],
+        },
+        "metadata": {"skill": "debate_case"},
+    }
+    if configuration is not None:
+        params["configuration"] = configuration
+    return {
+        "jsonrpc": "2.0",
+        "id": f"rpc-{method}",
+        "method": method,
+        "params": params,
+    }
+
+
+def test_a2a_v1_send_message_returns_completed_task(monkeypatch):
+    async def fake_run(self, research_request):
+        assert research_request.question == "研究 600519.SH 的复权风险"
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    response = client.post(
+        "/a2a",
+        json=_v1_request("SendMessage", "研究 600519.SH 的复权风险"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    task = payload["result"]["task"]
+    assert payload["id"] == "rpc-SendMessage"
+    assert task["id"]
+    assert task["contextId"]
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert task["history"][0]["role"] == "ROLE_USER"
+    assert task["history"][0]["parts"] == [
+        {"text": "研究 600519.SH 的复权风险"}
+    ]
+    assert task["artifacts"][0]["parts"][0]["data"]["meta"]["symbol"] == "600519.SH"
+
+
+def test_a2a_v1_stream_starts_with_task_and_finishes_with_status(monkeypatch):
+    async def fake_stream(self, research_request, pace=0):
+        yield {"stage": "data", "msg": "读取真实数据"}
+        yield {"stage": "skills", "msg": "运行金融 Skills"}
+        yield {"stage": "claim_start", "side": "bull", "agent": "Bull"}
+        yield {"stage": "result", "result": _minimal_result(research_request.symbol).to_dict()}
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "stream", fake_stream)
+    with client.stream(
+        "POST",
+        "/a2a",
+        json=_v1_request("SendStreamingMessage", "研究 300750.SZ 的流动性风险"),
+    ) as response:
+        assert response.status_code == 200
+        events = [
+            json.loads(line.removeprefix("data:").strip())
+            for line in response.iter_lines()
+            if line.startswith("data:")
+        ]
+
+    first = events[0]["result"]["task"]
+    assert first["status"]["state"] == "TASK_STATE_SUBMITTED"
+    updates = [event["result"]["statusUpdate"] for event in events if "statusUpdate" in event["result"]]
+    assert any(update["status"]["state"] == "TASK_STATE_WORKING" for update in updates)
+    assert updates[-1]["status"]["state"] == "TASK_STATE_COMPLETED"
+    artifact_event = next(event["result"]["artifactUpdate"] for event in events if "artifactUpdate" in event["result"])
+    assert artifact_event["lastChunk"] is True
+    assert artifact_event["artifact"]["parts"][0]["data"]["meta"]["symbol"] == "300750.SZ"
+
+
+def test_a2a_v1_get_task_returns_stored_task(monkeypatch):
+    async def fake_run(self, research_request):
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    sent = client.post(
+        "/a2a",
+        json=_v1_request("SendMessage", "研究 601318.SH 的风险证据"),
+    ).json()
+    task_id = sent["result"]["task"]["id"]
+
+    response = client.post("/a2a", json={
+        "jsonrpc": "2.0",
+        "id": "rpc-get-001",
+        "method": "GetTask",
+        "params": {"id": task_id, "historyLength": 1},
+    })
+
+    assert response.status_code == 200
+    task = response.json()["result"]
+    assert task["id"] == task_id
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert len(task["history"]) == 1
+
+
+def test_a2a_v1_get_task_returns_standard_not_found_error():
+    response = client.post("/a2a", json={
+        "jsonrpc": "2.0",
+        "id": "rpc-get-missing",
+        "method": "GetTask",
+        "params": {"id": "missing-task"},
+    })
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == -32001
+    assert response.json()["error"]["message"] == "Task not found"
+
+
+def test_a2a_v1_cancel_task_cancels_return_immediately_task(monkeypatch):
+    async def slow_run(self, research_request):
+        await asyncio.sleep(60)
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", slow_run)
+    with TestClient(a2a_server.app) as live_client:
+        sent = live_client.post(
+            "/a2a",
+            json=_v1_request(
+                "SendMessage",
+                "研究 600519.SH 的风险",
+                configuration={"returnImmediately": True},
+            ),
+        ).json()
+        task_id = sent["result"]["task"]["id"]
+
+        response = live_client.post("/a2a", json={
+            "jsonrpc": "2.0",
+            "id": "rpc-cancel-001",
+            "method": "CancelTask",
+            "params": {"id": task_id},
+        })
+
+    assert response.status_code == 200
+    task = response.json()["result"]
+    assert task["id"] == task_id
+    assert task["status"]["state"] == "TASK_STATE_CANCELED"
+
+
+def test_a2a_v1_stream_cancellation_emits_terminal_status(monkeypatch):
+    async def slow_stream(self, research_request, pace=0):
+        yield {"stage": "data", "msg": "读取数据"}
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "stream", slow_stream)
+
+    async def scenario():
+        request = _v1_request("SendStreamingMessage", "研究 600519.SH 的风险")
+        message = request["params"]["message"]
+        task = a2a_server._new_task(message, skill="debate_case")
+        task_id = task["id"]
+        research_request = a2a_server.extract_research_request(request)
+        queue = asyncio.Queue()
+        runner = asyncio.create_task(
+            a2a_server._run_v1_streaming_task(
+                task_id,
+                research_request,
+                skill="debate_case",
+                queue=queue,
+            )
+        )
+        a2a_server._TASK_RUNNERS[task_id] = runner
+        await queue.get()
+        await queue.get()
+        a2a_server._cancel_task(task_id)
+        runner.cancel()
+        await runner
+        remaining = []
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            remaining.append(event)
+        return remaining
+
+    remaining = asyncio.run(scenario())
+    assert any(
+        event["statusUpdate"]["status"]["state"] == "TASK_STATE_CANCELED"
+        for event in remaining
+    )
+
+
+def test_a2a_v1_stream_registers_runner_before_first_event(monkeypatch):
+    async def slow_stream(self, research_request, pace=0):
+        await asyncio.sleep(60)
+        if False:
+            yield {}
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "stream", slow_stream)
+
+    async def scenario():
+        response = await a2a_server._handle_v1(
+            _v1_request("SendStreamingMessage", "研究 600519.SH 的风险")
+        )
+        first = await anext(response.body_iterator)
+        event = json.loads(first.removeprefix("data:").strip())
+        task_id = event["result"]["task"]["id"]
+        registered = task_id in a2a_server._TASK_RUNNERS
+        runner = a2a_server._TASK_RUNNERS.get(task_id)
+        if runner is not None:
+            a2a_server._cancel_task(task_id)
+            runner.cancel()
+        await response.body_iterator.aclose()
+        return registered
+
+    assert asyncio.run(scenario()) is True

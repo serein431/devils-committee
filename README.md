@@ -11,7 +11,7 @@
 - LLM 通过 Volcengine Ark 调用，页面和状态接口显示名称为 **DeepSeek V4 Pro**；`LLM_MODEL` 必须填写活动提供的 Endpoint ID，不是显示名称。
 - 当前真实研究只支持 A 股。港股或其他境外市场会返回 `insufficient-evidence`，不会用 mock 补成结果。
 - 每个真实请求运行四个在线 QuantSkills；另外两个读取与当前构建和数据哈希相符的预计算报告。
-- 仓库中有本地服务、A2A、SSE、Bearer 鉴权和 Agent Card 代码。公网部署、真实凭证联调和参评材料中的外部链接仍需人工完成。
+- 公网服务已部署到 `https://devils.corvusapi.org`，提供 A2A v1 JSON-RPC、Task 查询和 SSE 状态事件。
 
 ## 默认开发：离线 mock
 
@@ -28,11 +28,14 @@ curl http://localhost:8080/healthz
 curl http://localhost:8080/.well-known/agent-card.json
 curl -X POST http://localhost:8080/a2a \
   -H 'Content-Type: application/json' \
-  -d '{"skill":"debate_case","topic":"研究 600519.SH 的复权、分红、因子和流动性风险"}'
-curl -N -X POST 'http://localhost:8080/a2a?stream=1' \
+  -d '{"jsonrpc":"2.0","id":"demo-1","method":"SendMessage","params":{"message":{"messageId":"input-1","role":"ROLE_USER","parts":[{"text":"研究 600519.SH 的复权、分红、因子和流动性风险"}]},"metadata":{"skill":"debate_case"}}}'
+curl -N -X POST http://localhost:8080/a2a \
   -H 'Content-Type: application/json' \
-  -d '{"skill":"debate_case","topic":"研究 300750.SZ 的成长因子、波动、流动性和指数事件"}'
+  -H 'Accept: text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":"demo-2","method":"SendStreamingMessage","params":{"message":{"messageId":"input-2","role":"ROLE_USER","parts":[{"text":"研究 300750.SZ 的成长因子、波动和流动性风险"}]},"metadata":{"skill":"debate_case"}}}'
 ```
+
+长任务会返回 `Task`。流式调用依次发送 `TASK_STATE_SUBMITTED`、`TASK_STATE_WORKING`、结果 artifact 和 `TASK_STATE_COMPLETED`；可使用 `GetTask` 查询，使用 `CancelTask` 取消未结束的任务。
 
 如果设置了 `A2A_BEARER_TOKEN`，调用方还要发送 `Authorization: Bearer <token>`。
 
@@ -131,7 +134,7 @@ RUN_LIVE_INTEGRATION=1 .venv-real/bin/python -m pytest tests/test_live_integrati
 | 项目 | 当前状态 |
 |---|---|
 | 团队成员姓名与联系方式 | `需人工填写` |
-| 公网服务地址与真实鉴权说明 | `待完成` |
+| 公网服务地址与真实鉴权说明 | `https://devils.corvusapi.org`；当前公开访问，不要求 Bearer |
 | 仓库提交地址及评审访问权限 | `需人工填写并确认` |
 | 真实用户试用记录 | `待完成` |
 | 小红书帖子 URL 与社区反馈 | `待完成` |

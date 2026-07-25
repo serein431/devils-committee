@@ -27,7 +27,7 @@
 3. 完成 Qoder 的项目问题与人机分工说明；已有开发截图或录屏可作为补充材料。
 4. **拉 2–3 个真小白**试用并录反应（05/15/07 最强证据）。
 5. **看一遍主题 E Reverse 官方视频**确认方向（现在是推测）。
-6. **公网上线**：`scripts/expose_tunnel.sh 8080`（需 Cloudflare 登录）+ 设 `PUBLIC_URL`，然后 `python scripts/smoke_a2a.py --url <公网地址>` 自检 13 项全绿。
+6. **公网检查**：打开 `https://devils.corvusapi.org`，运行 `python scripts/smoke_a2a.py --url https://devils.corvusapi.org`，确认 16 项通过。
 7. 找业务/合规导师问 15 红线。
 8. 打开教练前端做一次视觉验收（本机 `http://localhost:8080/`）。
 

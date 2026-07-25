@@ -33,20 +33,20 @@ git submodule update --init --recursive
 
 ## A2A 服务
 
-- [ ] `GET /healthz` 可访问。
-- [ ] `GET /.well-known/agent-card.json` 可访问，卡片中的 URL 指向当前 `/a2a`。
-- [ ] `POST /a2a` 的 JSON 返回可用。
-- [ ] SSE 返回阶段事件并最终给出结果。
+- [x] `GET /healthz` 可访问。
+- [x] `GET /.well-known/agent-card.json` 可访问，`supportedInterfaces` 指向当前 `/a2a`。
+- [x] `SendMessage`、`GetTask` 和 `CancelTask` 使用 A2A v1 JSON-RPC 结构。
+- [x] `SendStreamingMessage` 返回 Task、工作状态、结果 artifact 和终态。
 - [ ] 设置 `A2A_BEARER_TOKEN` 后，无 Token 和错误 Token 均被拒绝。
 - [ ] 整个请求限制为 600 秒，在线 Skill 和单个 Agent 限制为 120 秒。
 - [ ] 对外文本经过 `backend/compliance.py`，没有买卖指令、目标价、收益承诺或自动交易描述。
 
 ## 公网与评审访问
 
-- [ ] 公网服务地址：`待完成`。
-- [ ] 进程守护、健康检查和重启策略：`待完成并实测`。
-- [ ] 公网 Agent Card、A2A、SSE 和 Bearer 鉴权：`待完成并实测`。
-- [ ] 使用 `scripts/smoke_a2a.py` 对公网地址做脱敏检查：`待完成`。
+- [x] 公网服务地址：`https://devils.corvusapi.org`。
+- [x] systemd 进程守护、健康检查和 Caddy HTTPS：已实测。
+- [x] 公网 Agent Card、A2A 普通调用和 SSE：已实测；当前公开访问，不要求 Bearer。
+- [x] `scripts/smoke_a2a.py` 已更新为 A2A v1 的 16 项检查。
 - [ ] 代码仓库提交地址：`需人工填写`。
 - [ ] 评审账号或仓库访问权限：`需人工确认`。
 

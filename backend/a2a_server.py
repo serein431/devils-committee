@@ -11,10 +11,14 @@ Set PUBLIC_URL to the deployed HTTPS address so the Agent Card uses that URL.
 """
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
+from datetime import datetime, timezone
 import hmac
 import json
 import logging
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Request, HTTPException, Header
@@ -34,8 +38,19 @@ if not CARD_PATH.exists():                      # card lives at repo root in thi
 WEB_INDEX = ROOT.parent / "web" / "index.html"
 WEB_ASSETS = ROOT.parent / "web" / "assets"
 
-app = FastAPI(title="Devil's Committee A2A", version="0.2.0")
+app = FastAPI(title="Devil's Committee A2A", version="1.0.1")
 app.mount("/assets", StaticFiles(directory=WEB_ASSETS), name="assets")
+
+_TASKS: dict[str, dict[str, Any]] = {}
+_TASK_RUNNERS: dict[str, asyncio.Task] = {}
+_TERMINAL_STATES = {
+    "TASK_STATE_COMPLETED",
+    "TASK_STATE_FAILED",
+    "TASK_STATE_CANCELED",
+    "TASK_STATE_REJECTED",
+}
+_V1_METHODS = {"SendMessage", "SendStreamingMessage", "GetTask", "CancelTask"}
+_LEGACY_METHODS = {"message/send", "message/stream"}
 
 
 # --- auth ------------------------------------------------------------------
@@ -52,10 +67,26 @@ def _check_auth(authorization: str | None) -> None:
 @app.get("/.well-known/agent-card.json")
 async def agent_card() -> JSONResponse:
     card = json.loads(CARD_PATH.read_text(encoding="utf-8"))
-    card["url"] = f"{CONFIG.public_url.rstrip('/')}/a2a"
+    card.pop("url", None)
+    card["supportedInterfaces"] = [{
+        "url": f"{CONFIG.public_url.rstrip('/')}/a2a",
+        "protocolBinding": "JSONRPC",
+        "protocolVersion": "1.0",
+    }]
     card["documentationUrl"] = (
         f"{CONFIG.repository_url.rstrip('/')}/blob/main/README.md"
     )
+    card.pop("security", None)
+    if CONFIG.bearer_token:
+        card["securitySchemes"] = {
+            "bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}
+        }
+        card["securityRequirements"] = [
+            {"schemes": {"bearer": {"list": []}}}
+        ]
+    else:
+        card.pop("securitySchemes", None)
+        card.pop("securityRequirements", None)
     return JSONResponse(card)
 
 
@@ -101,7 +132,11 @@ def extract_research_request(body: dict) -> ResearchRequest:
     """Preserve structured research fields while accepting common A2A text shapes."""
 
     params = body.get("params")
-    payload = dict(params) if _is_legacy_jsonrpc(body) and isinstance(params, dict) else dict(body)
+    payload = dict(params) if _is_jsonrpc(body) and isinstance(params, dict) else dict(body)
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        for key, value in metadata.items():
+            payload.setdefault(key, value)
     topic = extract_topic(body)
     if topic and not payload.get("topic"):
         payload["topic"] = topic
@@ -112,7 +147,7 @@ def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
 
-def _is_legacy_jsonrpc(body: dict) -> bool:
+def _is_jsonrpc(body: dict) -> bool:
     request_id = body.get("id")
     return (
         body.get("jsonrpc") == "2.0"
@@ -142,6 +177,353 @@ def _legacy_agent_message(payload: dict) -> dict:
     }
 
 
+def _timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _v1_agent_message(
+    text: str,
+    *,
+    context_id: str,
+    task_id: str,
+) -> dict:
+    return {
+        "messageId": str(uuid4()),
+        "contextId": context_id,
+        "taskId": task_id,
+        "role": "ROLE_AGENT",
+        "parts": [{"text": text}],
+    }
+
+
+def _task_status(
+    state: str,
+    *,
+    context_id: str,
+    task_id: str,
+    text: str,
+) -> dict:
+    return {
+        "state": state,
+        "message": _v1_agent_message(text, context_id=context_id, task_id=task_id),
+        "timestamp": _timestamp(),
+    }
+
+
+def _normalise_user_message(message: dict, *, context_id: str, task_id: str) -> dict:
+    normalised = deepcopy(message)
+    normalised["contextId"] = context_id
+    normalised["taskId"] = task_id
+    return normalised
+
+
+def _new_task(message: dict, *, skill: str) -> dict:
+    task_id = str(uuid4())
+    context_id = message.get("contextId") or str(uuid4())
+    task = {
+        "id": task_id,
+        "contextId": context_id,
+        "status": _task_status(
+            "TASK_STATE_SUBMITTED",
+            context_id=context_id,
+            task_id=task_id,
+            text="研究任务已提交。",
+        ),
+        "artifacts": [],
+        "history": [
+            _normalise_user_message(message, context_id=context_id, task_id=task_id)
+        ],
+        "metadata": {"skill": skill},
+    }
+    _TASKS[task_id] = task
+    return task
+
+
+def _task_snapshot(task_id: str, history_length: int | None = None) -> dict:
+    task = deepcopy(_TASKS[task_id])
+    if history_length is not None:
+        task["history"] = [] if history_length == 0 else task["history"][-history_length:]
+    return task
+
+
+def _set_task_status(task_id: str, state: str, text: str) -> dict:
+    task = _TASKS[task_id]
+    status = _task_status(
+        state,
+        context_id=task["contextId"],
+        task_id=task_id,
+        text=text,
+    )
+    task["status"] = status
+    return {
+        "taskId": task_id,
+        "contextId": task["contextId"],
+        "status": deepcopy(status),
+    }
+
+
+def _result_artifact(task_id: str, payload: dict, *, skill: str) -> dict:
+    return {
+        "artifactId": f"research-result-{task_id}",
+        "name": "research-result",
+        "description": "Devil's Committee research and audit result",
+        "parts": [{"data": payload, "mediaType": "application/json"}],
+        "metadata": {"skill": skill},
+    }
+
+
+def _complete_task(task_id: str, payload: dict, *, skill: str) -> tuple[dict, dict]:
+    task = _TASKS[task_id]
+    artifact = _result_artifact(task_id, payload, skill=skill)
+    task["artifacts"] = [artifact]
+    task["history"].append(
+        _v1_agent_message(
+            "研究完成，结构化结果已写入 artifacts。",
+            context_id=task["contextId"],
+            task_id=task_id,
+        )
+    )
+    artifact_update = {
+        "taskId": task_id,
+        "contextId": task["contextId"],
+        "artifact": deepcopy(artifact),
+        "append": False,
+        "lastChunk": True,
+    }
+    status_update = _set_task_status(task_id, "TASK_STATE_COMPLETED", "研究任务已完成。")
+    return artifact_update, status_update
+
+
+def _fail_task(task_id: str) -> dict:
+    return _set_task_status(task_id, "TASK_STATE_FAILED", "研究任务执行失败。")
+
+
+def _cancel_task(task_id: str) -> dict:
+    return _set_task_status(task_id, "TASK_STATE_CANCELED", "研究任务已取消。")
+
+
+def _valid_v1_message(message: Any) -> bool:
+    if not isinstance(message, dict):
+        return False
+    if not isinstance(message.get("messageId"), str) or not message["messageId"].strip():
+        return False
+    if message.get("role") != "ROLE_USER":
+        return False
+    parts = message.get("parts")
+    return (
+        isinstance(parts, list)
+        and bool(parts)
+        and all(
+            isinstance(part, dict)
+            and any(key in part for key in ("text", "data", "url", "raw"))
+            for part in parts
+        )
+    )
+
+
+def _v1_skill(params: dict) -> str:
+    metadata = params.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("skill"), str):
+        return metadata["skill"]
+    return params.get("skill", "debate_case")
+
+
+def _progress_text(event: dict) -> str | None:
+    stage = event.get("stage")
+    if stage == "data":
+        return event.get("msg") or "正在读取 PandaData 研究数据。"
+    if stage == "skills":
+        return event.get("msg") or "正在运行金融 Skills。"
+    if stage == "argue":
+        return event.get("msg") or "四个研究 Agent 正在分析同一批证据。"
+    if stage == "claim_start":
+        name = event.get("agent") or event.get("side") or "研究 Agent"
+        return f"{name} 开始陈述。"
+    if stage == "audit":
+        return event.get("msg") or "审计 Agent 正在核查证据。"
+    if stage == "synthesize":
+        return event.get("msg") or "主持 Agent 正在汇总分歧。"
+    return None
+
+
+async def _run_v1_task(
+    task_id: str,
+    research_request: ResearchRequest,
+    *,
+    skill: str,
+) -> None:
+    try:
+        _set_task_status(task_id, "TASK_STATE_WORKING", "正在读取数据并执行研究。")
+        orchestrator = DebateOrchestrator()
+        if skill == "audit_claims":
+            payload = await orchestrator.audit_claims(research_request)
+        else:
+            payload = (await orchestrator.run(research_request)).to_dict()
+        if _TASKS[task_id]["status"]["state"] != "TASK_STATE_CANCELED":
+            _complete_task(task_id, payload, skill=skill)
+    except asyncio.CancelledError:
+        if _TASKS[task_id]["status"]["state"] != "TASK_STATE_CANCELED":
+            _cancel_task(task_id)
+    except Exception:
+        log.exception("A2A v1 task failed")
+        _fail_task(task_id)
+    finally:
+        _TASK_RUNNERS.pop(task_id, None)
+
+
+async def _run_v1_streaming_task(
+    task_id: str,
+    research_request: ResearchRequest,
+    *,
+    skill: str,
+    queue: asyncio.Queue,
+) -> None:
+    try:
+        working = _set_task_status(
+            task_id,
+            "TASK_STATE_WORKING",
+            "正在读取 PandaData 并运行金融 Skills。",
+        )
+        await queue.put({"statusUpdate": working})
+        orchestrator = DebateOrchestrator()
+        payload = None
+        if skill == "audit_claims":
+            payload = await orchestrator.audit_claims(research_request)
+        else:
+            async for event in orchestrator.stream(research_request, pace=0):
+                if event.get("stage") == "result":
+                    payload = event.get("result")
+                    continue
+                progress = _progress_text(event)
+                if progress:
+                    update = _set_task_status(task_id, "TASK_STATE_WORKING", progress)
+                    update["metadata"] = {"stage": event.get("stage")}
+                    await queue.put({"statusUpdate": update})
+        if not isinstance(payload, dict):
+            raise RuntimeError("task produced no result")
+        if _TASKS[task_id]["status"]["state"] != "TASK_STATE_CANCELED":
+            artifact_update, status_update = _complete_task(task_id, payload, skill=skill)
+            await queue.put({"artifactUpdate": artifact_update})
+            await queue.put({"statusUpdate": status_update})
+    except asyncio.CancelledError:
+        task = _TASKS[task_id]
+        if task["status"]["state"] != "TASK_STATE_CANCELED":
+            canceled = _cancel_task(task_id)
+        else:
+            canceled = {
+                "taskId": task_id,
+                "contextId": task["contextId"],
+                "status": deepcopy(task["status"]),
+            }
+        await queue.put({"statusUpdate": canceled})
+    except Exception:
+        log.exception("A2A v1 streaming task failed")
+        failed = _fail_task(task_id)
+        await queue.put({"statusUpdate": failed})
+    finally:
+        _TASK_RUNNERS.pop(task_id, None)
+        await queue.put(None)
+
+
+def _v1_error(request_id: str | int | None, code: int, message: str) -> JSONResponse:
+    return JSONResponse(_jsonrpc_error(request_id, code, message))
+
+
+async def _handle_v1(body: dict) -> JSONResponse | StreamingResponse:
+    request_id = body.get("id")
+    method = body.get("method")
+    params = body.get("params")
+    if not isinstance(params, dict):
+        return _v1_error(request_id, -32602, "Invalid params")
+
+    if method == "GetTask":
+        task_id = params.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            return _v1_error(request_id, -32602, "Invalid params")
+        if task_id not in _TASKS:
+            return _v1_error(request_id, -32001, "Task not found")
+        history_length = params.get("historyLength")
+        if history_length is not None and (
+            not isinstance(history_length, int) or history_length < 0
+        ):
+            return _v1_error(request_id, -32602, "Invalid params")
+        return JSONResponse(
+            _jsonrpc_result(request_id, _task_snapshot(task_id, history_length))
+        )
+
+    if method == "CancelTask":
+        task_id = params.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            return _v1_error(request_id, -32602, "Invalid params")
+        if task_id not in _TASKS:
+            return _v1_error(request_id, -32001, "Task not found")
+        if _TASKS[task_id]["status"]["state"] in _TERMINAL_STATES:
+            return _v1_error(request_id, -32002, "Task not cancelable")
+        _cancel_task(task_id)
+        runner = _TASK_RUNNERS.get(task_id)
+        if runner is not None:
+            runner.cancel()
+        return JSONResponse(_jsonrpc_result(request_id, _task_snapshot(task_id)))
+
+    message = params.get("message")
+    if not _valid_v1_message(message):
+        return _v1_error(request_id, -32602, "Invalid params")
+    try:
+        research_request = extract_research_request(body)
+    except (TypeError, ValueError):
+        return _v1_error(request_id, -32602, "Invalid params")
+    if not research_request.question:
+        return _v1_error(request_id, -32602, "Invalid params")
+
+    skill = _v1_skill(params)
+    task = _new_task(message, skill=skill)
+    task_id = task["id"]
+
+    if method == "SendMessage":
+        configuration = params.get("configuration")
+        return_immediately = (
+            isinstance(configuration, dict)
+            and configuration.get("returnImmediately") is True
+        )
+        initial = _task_snapshot(task_id)
+        runner = asyncio.create_task(
+            _run_v1_task(task_id, research_request, skill=skill)
+        )
+        _TASK_RUNNERS[task_id] = runner
+        if return_immediately:
+            return JSONResponse(_jsonrpc_result(request_id, {"task": initial}))
+        await runner
+        return JSONResponse(
+            _jsonrpc_result(request_id, {"task": _task_snapshot(task_id)})
+        )
+
+    queue: asyncio.Queue = asyncio.Queue()
+    initial = _task_snapshot(task_id)
+
+    async def stream_v1():
+        runner = asyncio.create_task(
+            _run_v1_streaming_task(
+                task_id,
+                research_request,
+                skill=skill,
+                queue=queue,
+            )
+        )
+        _TASK_RUNNERS[task_id] = runner
+        yield _sse(_jsonrpc_result(request_id, {"task": initial}))
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield _sse(_jsonrpc_result(request_id, event))
+
+    return StreamingResponse(
+        stream_v1(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/a2a")
 async def a2a(request: Request, authorization: str | None = Header(default=None)):
     _check_auth(authorization)
@@ -149,14 +531,21 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
         body = await request.json()
         if not isinstance(body, dict):
             raise ValueError("request body must be an object")
-        research_request = extract_research_request(body)
     except (TypeError, ValueError, json.JSONDecodeError):
         return JSONResponse(status_code=422, content={"detail": "invalid request"})
-    jsonrpc = _is_legacy_jsonrpc(body)
+    jsonrpc = _is_jsonrpc(body)
     request_id = body.get("id") if jsonrpc else None
     method = body.get("method") if jsonrpc else None
-    if jsonrpc and method not in {"message/send", "message/stream"}:
+    if jsonrpc and method in _V1_METHODS:
+        return await _handle_v1(body)
+    if jsonrpc and method not in _LEGACY_METHODS:
         return JSONResponse(_jsonrpc_error(request_id, -32601, "method not found"))
+    try:
+        research_request = extract_research_request(body)
+    except (TypeError, ValueError):
+        if jsonrpc:
+            return JSONResponse(_jsonrpc_error(request_id, -32602, "invalid params"))
+        return JSONResponse(status_code=422, content={"detail": "invalid request"})
     if not research_request.question:
         if jsonrpc:
             return JSONResponse(_jsonrpc_error(request_id, -32602, "no task/topic found in message"))

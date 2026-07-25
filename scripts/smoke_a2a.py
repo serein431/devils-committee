@@ -59,8 +59,9 @@ def _req(
     body: dict | None = None,
     token: str | None = None,
     timeout: int = REQUEST_TIMEOUT,
+    accept: str = "application/json",
 ) -> tuple[int, str]:
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    headers = {"Content-Type": "application/json", "Accept": accept}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     data = json.dumps(body).encode() if body is not None else None
@@ -93,6 +94,38 @@ def _research_body(ticker: str, *, skill: str = "debate_case") -> dict:
             "end_date": "20260724",
         }
     return {"skill": skill, "topic": ticker}
+
+
+def _v1_body(method: str, research: dict, request_id: str) -> dict:
+    metadata = dict(research)
+    skill = metadata.pop("skill", "debate_case")
+    text = metadata.get("question") or metadata.get("topic") or ""
+    metadata["skill"] = skill
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "params": {
+            "message": {
+                "messageId": f"message-{request_id}",
+                "role": "ROLE_USER",
+                "parts": [{"text": text}],
+            },
+            "metadata": metadata,
+        },
+    }
+
+
+def _task_payload(task: dict) -> dict:
+    return task["artifacts"][0]["parts"][0]["data"]
+
+
+def _sse_events(body: str) -> list[dict]:
+    return [
+        json.loads(line.removeprefix("data:").strip())
+        for line in body.splitlines()
+        if line.startswith("data:")
+    ]
 
 
 def main() -> int:
@@ -143,11 +176,22 @@ def main() -> int:
             if isinstance(item, dict)
         }
         check("GET agent-card 200", status == 200)
-        check("agent-card url points to /a2a", card.get("url", "").endswith("/a2a"))
+        interfaces = card.get("supportedInterfaces", [])
+        preferred = interfaces[0] if interfaces else {}
+        check("agent-card uses A2A v1 JSONRPC", (
+            preferred.get("url", "").endswith("/a2a")
+            and preferred.get("protocolBinding") == "JSONRPC"
+            and preferred.get("protocolVersion") == "1.0"
+        ))
         check("agent-card advertises both skills", {"debate_case", "audit_claims"} <= ids)
         check(
             "agent-card streaming:true",
             card.get("capabilities", {}).get("streaming") is True,
+        )
+        has_security = bool(card.get("securityRequirements"))
+        check(
+            "agent-card auth matches health",
+            has_security == (health_modes.get("auth") == "on"),
         )
     except Exception as exc:
         check("GET agent-card", False, type(exc).__name__)
@@ -158,14 +202,19 @@ def main() -> int:
             f"{base}/a2a",
             method="POST",
             token=args.token,
-            body=debate_body,
+            body=_v1_body("SendMessage", debate_body, "smoke-send"),
         )
-        result = json.loads(body)["result"]
+        response = json.loads(body)
+        task = response["result"]["task"]
+        result = _task_payload(task)
         meta = result.get("meta", {})
         manifest = meta.get("skills_manifest", {})
         results = manifest.get("results", [])
         all_skills = set(manifest.get("all_skills", []))
-        check("POST debate_case 200", status == 200)
+        check("SendMessage returns completed Task", (
+            status == 200
+            and task.get("status", {}).get("state") == "TASK_STATE_COMPLETED"
+        ))
         check(
             "debate data_status success",
             meta.get("data_status") == "success",
@@ -190,21 +239,45 @@ def main() -> int:
                 len(results) == len(REQUIRED_SKILL_IDS)
                 and all(item.get("mode") != "mock" for item in results),
             )
+        task_id = task["id"]
+        get_status, get_body = _req(
+            f"{base}/a2a",
+            method="POST",
+            token=args.token,
+            body={
+                "jsonrpc": "2.0",
+                "id": "smoke-get",
+                "method": "GetTask",
+                "params": {"id": task_id, "historyLength": 1},
+            },
+        )
+        stored = json.loads(get_body).get("result", {})
+        check("GetTask retrieves completed Task", (
+            get_status == 200
+            and stored.get("id") == task_id
+            and stored.get("status", {}).get("state") == "TASK_STATE_COMPLETED"
+        ))
     except Exception as exc:
-        check("POST debate_case", False, type(exc).__name__)
+        check("SendMessage debate_case", False, type(exc).__name__)
 
     try:
         status, body = _req(
             f"{base}/a2a",
             method="POST",
             token=args.token,
-            body=_research_body(args.ticker, skill="audit_claims"),
+            body=_v1_body(
+                "SendMessage",
+                _research_body(args.ticker, skill="audit_claims"),
+                "smoke-audit",
+            ),
         )
         payload = json.loads(body)
-        audit = payload.get("result", {})
+        task = payload.get("result", {}).get("task", {})
+        audit = _task_payload(task)
         check(
-            "POST audit_claims 200",
-            status == 200 and payload.get("skill") == "audit_claims",
+            "SendMessage audit_claims completed",
+            status == 200
+            and task.get("status", {}).get("state") == "TASK_STATE_COMPLETED",
         )
         check(
             "audit_claims returns verdict list",
@@ -214,20 +287,37 @@ def main() -> int:
         check("POST audit_claims", False, type(exc).__name__)
 
     try:
+        boundary = _research_body("研究 TSLA 的流动性风险")
         status, body = _req(
-            f"{base}/a2a?stream=1&pace=0",
+            f"{base}/a2a",
             method="POST",
             token=args.token,
-            body=debate_body,
+            body=_v1_body("SendStreamingMessage", boundary, "smoke-stream"),
+            accept="text/event-stream",
         )
-        got_result = '"stage": "result"' in body or '"stage":"result"' in body
-        check("POST ?stream=1 yields result event", status == 200 and got_result)
+        events = _sse_events(body)
+        first_task = events[0]["result"]["task"] if events else {}
+        statuses = [
+            event["result"]["statusUpdate"]["status"]["state"]
+            for event in events
+            if "statusUpdate" in event.get("result", {})
+        ]
+        check("SendStreamingMessage emits Task lifecycle", (
+            status == 200
+            and first_task.get("status", {}).get("state") == "TASK_STATE_SUBMITTED"
+            and "TASK_STATE_WORKING" in statuses
+            and statuses[-1:] == ["TASK_STATE_COMPLETED"]
+        ))
     except Exception as exc:
-        check("POST ?stream=1", False, type(exc).__name__)
+        check("SendStreamingMessage", False, type(exc).__name__)
 
     if args.token:
         try:
-            status, _ = _req(f"{base}/a2a", method="POST", body=debate_body)
+            status, _ = _req(
+                f"{base}/a2a",
+                method="POST",
+                body=_v1_body("SendMessage", debate_body, "smoke-auth"),
+            )
             check("auth: 401 without token", status == 401, f"status={status}")
         except Exception as exc:
             check("auth check", False, type(exc).__name__)
