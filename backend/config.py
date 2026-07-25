@@ -76,7 +76,9 @@ class Config:
     quantskills_dir: str = field(default_factory=lambda: _env("QUANTSKILLS_DIR", "./vendor/quantskills"))
     precomputed_dir: str = field(default_factory=lambda: _env("PRECOMPUTED_DIR", "./var/precomputed"))
     cache_dir: str = field(default_factory=lambda: _env("CACHE_DIR", "./var/cache"))
-    data_version: str = field(default_factory=lambda: _env("DATA_VERSION", "panda-2026-07"))
+    data_version: str = field(
+        default_factory=lambda: _env("DATA_VERSION", "panda-2026-07-evidence-v2")
+    )
     build_commit: str = field(default_factory=lambda: _env("BUILD_COMMIT"))
     precomputed_commit: str = field(
         default_factory=lambda: _env("PRECOMPUTED_COMMIT")
