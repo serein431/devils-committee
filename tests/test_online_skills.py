@@ -38,7 +38,10 @@ def _bundle() -> MarketDataBundle:
         "daily_post",
         "adj_factor",
         "dividend",
+        "cash_dividend",
+        "split",
         "status_change",
+        "stock_detail",
         "trade_list_start",
         "trade_list_end",
         "index_weights",
@@ -166,6 +169,65 @@ def test_missing_adjustment_dataset_is_insufficient_not_error():
 
     assert result.status == "insufficient-evidence"
     assert result.warnings == ["adj_factor dataset unavailable"]
+
+
+def test_adjustment_rows_use_iso_dates_and_explicit_cash_split_sources(monkeypatch):
+    records = {
+        "daily": [
+            {"date": "20240101", "close": 100.0},
+            {"date": "20240102", "close": 99.0},
+        ],
+        "daily_post": [
+            {"date": "20240101", "close": 100.0},
+            {"date": "20240102", "close": 100.0},
+        ],
+        # ex_factor includes cash/share effects and must not be treated as a split.
+        "adj_factor": [{"ex_date": "20240102", "ex_factor": 9.0}],
+        "dividend": [],
+        "cash_dividend": [
+            {"ex_date": "20240102", "div_cash_gross": 12.3, "round_lot": 10.0}
+        ],
+        "split": [],
+    }
+    monkeypatch.setattr(
+        online_module,
+        "_read_records",
+        lambda bundle, name: records[name],
+    )
+
+    rows, warning = online_module._adjustment_rows(_request(), _bundle())
+
+    assert warning == ""
+    assert [row["date"] for row in rows] == ["2024-01-01", "2024-01-02"]
+    assert rows[1]["cash_dividend"] == 1.23
+    assert rows[1]["split_factor"] == 1.0
+
+
+def test_universe_rows_use_stock_detail_lifecycle_dates(monkeypatch):
+    records = {
+        "trade_list_start": [{"date": "20240101", "symbol": "600519.SH"}],
+        "trade_list_end": [{"date": "20240131", "symbol": "600519.SH"}],
+        "status_change": [],
+        "stock_detail": [
+            {
+                "symbol": "600519.SH",
+                "listed_date": "1991-08-27",
+                "de_listed_date": "0000-00-00",
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        online_module,
+        "_read_records",
+        lambda bundle, name: records[name],
+    )
+
+    rows, warning = online_module._universe_rows(_request(), _bundle())
+
+    assert warning == ""
+    assert [row["date"] for row in rows] == ["2024-01-01", "2026-07-24"]
+    assert all(row["listed_at"] == "1991-08-27" for row in rows)
+    assert all(row["delisted_at"] == "" for row in rows)
 
 
 def test_missing_survivorship_datasets_are_insufficient_not_error():

@@ -214,9 +214,21 @@ def _first(row: dict[str, Any], *names: str, default: Any = "") -> Any:
 
 def _date_key(value: Any) -> str:
     raw = str(value or "").strip()
+    if raw.lower() in {"nan", "nat", "none", "null", "0000-00-00", "00000000"}:
+        return ""
     if len(raw) >= 10 and raw[4] in "-/" and raw[7] in "-/":
-        return f"{raw[:4]}{raw[5:7]}{raw[8:10]}"
-    return raw[:8]
+        key = f"{raw[:4]}{raw[5:7]}{raw[8:10]}"
+    else:
+        key = raw[:8]
+    if len(key) != 8 or not key.isdigit():
+        return ""
+    try:
+        from datetime import datetime
+
+        datetime.strptime(key, "%Y%m%d")
+    except ValueError:
+        return ""
+    return key
 
 
 def _iso_date(value: Any) -> str:
@@ -280,6 +292,16 @@ def _adjustment_rows(
         if "dividend" in bundle.datasets
         else []
     )
+    cash_dividend = (
+        _read_records(bundle, "cash_dividend")
+        if "cash_dividend" in bundle.datasets
+        else []
+    )
+    splits = (
+        _read_records(bundle, "split")
+        if "split" in bundle.datasets
+        else []
+    )
     raw_by_date = {
         _date_key(_first(row, "date", "trade_date")): _number(
             _first(row, "close", "close_price")
@@ -292,13 +314,29 @@ def _adjustment_rows(
         )
         for row in adjusted
     }
+    # ``ex_factor`` is a vendor adjustment factor that can combine cash and
+    # share events; it is deliberately not used as ``split_factor``. Keep
+    # explicit split factors (when supplied) keyed by the ex-date.
     factor_by_date = {
-        _date_key(_first(row, "date", "trade_date")): _number(
-            _first(row, "adj_factor", "factor", "split_factor"),
+        _date_key(_first(row, "ex_date", "date", "trade_date")): _number(
+            _first(row, "split_factor", "factor"),
             1.0,
         )
         for row in factors
+        if _date_key(_first(row, "ex_date", "date", "trade_date"))
     }
+    split_by_date: dict[str, float] = {}
+    for row in splits:
+        event_date = _date_key(
+            _first(row, "ex_date", "date", "trade_date")
+        )
+        pre = _number(_first(row, "split_factor_pre", "factor_pre"))
+        post = _number(_first(row, "split_factor_post", "factor_post"))
+        explicit = _number(_first(row, "split_factor", "factor"), 1.0)
+        if event_date and pre > 0 and post > 0:
+            split_by_date[event_date] = post / pre
+        elif event_date and explicit > 0:
+            split_by_date[event_date] = explicit
     cash_names = (
         "cash_dividend",
         "cash_amount",
@@ -309,8 +347,20 @@ def _adjustment_rows(
         any(name in row and row[name] not in (None, "") for name in cash_names)
         for row in dividend
     )
-    cash_by_date = {
-        _date_key(
+    cash_by_date: dict[str, float] = {}
+    for row in cash_dividend:
+        event_date = _date_key(
+            _first(row, "ex_date", "date", "ex_dividend_date")
+        )
+        gross = _first(row, "div_cash_gross", *cash_names)
+        amount = _number(gross, float("nan"))
+        round_lot = _number(_first(row, "round_lot"), 1.0)
+        if event_date and math.isfinite(amount) and round_lot > 0:
+            # PandaData's cash-dividend response is quoted per round lot.
+            cash_by_date[event_date] = amount / round_lot
+            cash_available = True
+    for row in dividend:
+        event_date = _date_key(
             _first(
                 row,
                 "date",
@@ -318,26 +368,22 @@ def _adjustment_rows(
                 "ex_dividend_date",
                 "record_date",
             )
-        ): _number(_first(row, *cash_names))
-        for row in dividend
-        if _first(
-            row,
-            "date",
-            "ex_date",
-            "ex_dividend_date",
-            "record_date",
         )
-    }
+        if event_date and event_date not in cash_by_date:
+            cash_by_date[event_date] = _number(_first(row, *cash_names))
     rows = [
         {
             "symbol": request.symbol,
-            "date": date,
+            "date": _iso_date(date),
             "close": raw_by_date[date],
             "adj_close": adjusted_by_date.get(date, raw_by_date[date]),
-            "split_factor": factor_by_date.get(date, 1.0),
+            "split_factor": split_by_date.get(
+                date, factor_by_date.get(date, 1.0)
+            ),
             "cash_dividend": cash_by_date.get(date, 0.0),
         }
         for date in sorted(raw_by_date)
+        if _iso_date(date)
     ]
     warning = "" if cash_available else "cash_dividend amount unavailable"
     return rows, warning
@@ -350,6 +396,11 @@ def _universe_rows(
     start_rows = _read_records(bundle, "trade_list_start")
     end_rows = _read_records(bundle, "trade_list_end")
     status_rows = _read_records(bundle, "status_change")
+    detail_rows = (
+        _read_records(bundle, "stock_detail")
+        if "stock_detail" in bundle.datasets
+        else []
+    )
     start_by_symbol = {
         str(_first(row, "symbol", "stock_symbol", "code")): row
         for row in start_rows
@@ -361,7 +412,13 @@ def _universe_rows(
         if _first(row, "symbol", "stock_symbol", "code")
     }
     status_by_symbol: dict[str, dict[str, Any]] = {}
+    detail_by_symbol = {
+        str(_first(row, "symbol", "stock_symbol", "code")): row
+        for row in detail_rows
+        if _first(row, "symbol", "stock_symbol", "code")
+    }
     delisting_return_available = False
+    delisting_observed = False
     for row in status_rows:
         symbol = str(_first(row, "symbol", "stock_symbol", "code"))
         if not symbol:
@@ -378,8 +435,21 @@ def _universe_rows(
                 current[target] = value
                 if target == "delisting_return":
                     delisting_return_available = True
+        if _date_key(
+            _first(row, "delisted_at", "delist_date", "delisting_date")
+        ):
+            delisting_observed = True
+    detail = detail_by_symbol.get(request.symbol, {})
+    detail_delisted = _first(
+        detail, "de_listed_date", "delisted_date", "delisted_at", "delist_date"
+    )
+    if _date_key(detail_delisted):
+        delisting_observed = True
     output: list[dict[str, Any]] = []
-    symbols = sorted(set(start_by_symbol) | set(end_by_symbol) | set(status_by_symbol))
+    # The request concerns one security. Restrict the audit rows to that
+    # security so a full-market trade-list snapshot does not create thousands
+    # of rows with no lifecycle metadata for the requested sample.
+    symbols = [request.symbol]
     for date, members in (
         (request.start_date, start_by_symbol),
         (request.end_date, end_by_symbol),
@@ -387,16 +457,28 @@ def _universe_rows(
         for symbol in symbols:
             row = members.get(symbol, {})
             status = status_by_symbol.get(symbol, {})
+            listed_at = _first(
+                detail,
+                "listed_date",
+                "listed_at",
+                "list_date",
+                default=_first(status, "listed_at", "list_date", "listing_date"),
+            )
+            delisted_at = _first(
+                detail,
+                "de_listed_date",
+                "delisted_date",
+                "delisted_at",
+                "delist_date",
+                "delisting_date",
+                default=_first(status, "delisted_at", "delist_date", "delisting_date"),
+            )
             output.append(
                 {
                     "symbol": symbol,
-                    "date": date,
-                    "listed_at": _first(
-                        status, "listed_at", "list_date", "listing_date"
-                    ),
-                    "delisted_at": _first(
-                        status, "delisted_at", "delist_date", "delisting_date"
-                    ),
+                    "date": _iso_date(date),
+                    "listed_at": _iso_date(listed_at),
+                    "delisted_at": _iso_date(delisted_at),
                     "return": _first(
                         row,
                         "return",
@@ -419,7 +501,12 @@ def _universe_rows(
                 "eligible": 1,
             }
         )
-    warning = "" if delisting_return_available else "delisting_return unavailable"
+    warnings: list[str] = []
+    if not detail:
+        warnings.append("stock_detail dataset unavailable; lifecycle dates incomplete")
+    if delisting_observed and not delisting_return_available:
+        warnings.append("delisting_return unavailable")
+    warning = "; ".join(warnings)
     return output, warning
 
 
@@ -674,10 +761,27 @@ class OnlineSkillRunner:
         self, request: ResearchRequest, bundle: MarketDataBundle
     ) -> SkillResult:
         rows, warning = _event_rows(request, bundle)
+        # get_index_weights does not carry an official announcement date for
+        # every row. The QuantSkill validator requires both dates, so omit
+        # incomplete events instead of sending empty strings and producing a
+        # misleading invalid_event_date report.
+        valid_rows = [
+            row
+            for row in rows
+            if _iso_date(row.get("announcement_date"))
+            and _iso_date(row.get("effective_date"))
+            and _iso_date(row.get("announcement_date"))
+            <= _iso_date(row.get("effective_date"))
+        ]
+        if len(valid_rows) != len(rows):
+            # Keep one stable public warning. The detail that rows were
+            # filtered is implicit in the insufficient-evidence result and
+            # does not need to be concatenated into a second phrase.
+            warning = warning or "announcement_date unavailable"
         return self._run(
             "skill-index-rebalance-event-study",
             bundle,
-            rows,
+            valid_rows,
             EVENT_COLUMNS,
             forced_warning=warning,
         )

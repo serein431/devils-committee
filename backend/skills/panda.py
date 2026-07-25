@@ -73,6 +73,24 @@ DATASET_CALLS: dict[str, tuple[str, ParamsFactory]] = {
             "end_date": r.end_date,
         },
     ),
+    "cash_dividend": (
+        "get_stock_cash_dividend",
+        lambda r: {
+            "symbol": r.symbol,
+            "start_date": r.start_date,
+            "end_date": r.end_date,
+            "fields": [],
+        },
+    ),
+    "split": (
+        "get_stock_split",
+        lambda r: {
+            "symbol": r.symbol,
+            "start_date": r.start_date,
+            "end_date": r.end_date,
+            "fields": [],
+        },
+    ),
     "status_change": (
         "get_stock_status_change",
         lambda r: {
@@ -80,6 +98,14 @@ DATASET_CALLS: dict[str, tuple[str, ParamsFactory]] = {
             "start_date": r.start_date,
             "end_date": r.end_date,
             "fields": [],
+        },
+    ),
+    "stock_detail": (
+        "get_stock_detail",
+        lambda r: {
+            "symbol": [r.symbol],
+            "fields": [],
+            "status": None,
         },
     ),
     "trade_list_start": (
@@ -143,7 +169,7 @@ SENSITIVE_COLUMN_PARTS = {
     "cookie",
 }
 
-VALID_EMPTY_DATASETS = {"status_change"}
+VALID_EMPTY_DATASETS = {"status_change", "dividend", "cash_dividend", "split"}
 
 _TIME_SUFFIX = (
     r"(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
@@ -154,6 +180,7 @@ _COMPACT_DATETIME = re.compile(rf"^(\d{{8}}){_TIME_SUFFIX}$")
 _SEPARATED_DATE = re.compile(
     rf"^(\d{{4}})[-/](\d{{1,2}})[-/](\d{{1,2}}){_TIME_SUFFIX}$"
 )
+_MISSING_DATE_STRINGS = {"nan", "nat", "none", "null", "0000-00-00", "00000000"}
 
 
 def _date_value_is_missing(value: Any) -> bool:
@@ -187,6 +214,8 @@ def _normalize_date_value(value: Any) -> str:
 
     raw = str(value).strip()
     if not raw:
+        return ""
+    if raw.lower() in _MISSING_DATE_STRINGS:
         return ""
     match = _COMPACT_DATE.fullmatch(raw) or _COMPACT_DATETIME.fullmatch(raw)
     if match:

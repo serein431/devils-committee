@@ -129,7 +129,10 @@ def _install_fake_panda(monkeypatch, daily=None, daily_error=None):
         "get_stock_daily_post",
         "get_adj_factor",
         "get_stock_dividend",
+        "get_stock_cash_dividend",
+        "get_stock_split",
         "get_stock_status_change",
+        "get_stock_detail",
         "get_trade_list",
         "get_index_weights",
         "get_index_daily",
@@ -289,13 +292,15 @@ def test_normalize_frame_cleans_dates_sorts_and_deduplicates():
         {" date ": "20240102.0", "symbol": "600519.SH", "close": 10.0},
         {" date ": "20240102.0", "symbol": "600519.SH", "close": 10.0},
         {" date ": None, "symbol": "600519.SH", "close": 9.0},
+        {" date ": "NaN", "symbol": "600519.SH", "close": 8.0},
+        {" date ": "0000-00-00", "symbol": "600519.SH", "close": 7.0},
     ])
 
     normalized = normalize_frame(frame)
 
-    assert [row["date"] for row in normalized.rows] == ["", "20240102", "20240103"]
+    assert [row["date"] for row in normalized.rows] == ["", "", "", "20240102", "20240103"]
     assert all(len(row["date"]) == 8 for row in normalized.rows if row["date"])
-    assert len(normalized) == 3
+    assert len(normalized) == 5
 
 
 def test_normalize_frame_handles_real_pandas_date_scalars():
