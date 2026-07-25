@@ -313,6 +313,8 @@ class DebateOrchestrator:
                 elapsed_sec=round(_mono() - started, 2),
                 meta={
                     "symbol": request.symbol,
+                    "start_date": request.start_date,
+                    "end_date": request.end_date,
                     "supported_market": request.supported,
                     "data_status": evidence.bundle.status,
                     "modes": modes,

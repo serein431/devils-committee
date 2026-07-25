@@ -1,10 +1,12 @@
 .venv/
+.venv-real/
 __pycache__/
 *.pyc
 .coverage
 .pytest_cache/
 htmlcov/
 .env
+user.json
 .cache/
 var/cache/
 var/live-records/

@@ -63,6 +63,8 @@ def test_research_request_is_accepted_without_reparsing(monkeypatch, evidence_fi
 
     assert seen == [request]
     assert result.topic == request.question
+    assert result.meta["start_date"] == request.start_date
+    assert result.meta["end_date"] == request.end_date
 
 
 def test_us_input_returns_structured_insufficient_evidence(monkeypatch):
