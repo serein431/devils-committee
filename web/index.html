@@ -454,6 +454,7 @@ const VOICE_PROFILE={
 };
 let recognition=null,recognitionActive=false,recognitionFailed=false,recognitionFinal="",recognitionCandidate="";
 let voiceSubmitQueued=false,researchRunning=false,availableVoices=[];
+let voiceNetworkRetries=0;
 let speechVoiceCatalogReady=false,narrationQueue=[],narrationBusy=false;
 let speechToken=0,speechWatchdog=0,speechWatchdogFallback=null,activeUtterance=null,speechPaused=false;
 let conversationRoot="",conversationSymbol="",conversationHistory=[],conversationRound=0,activeQuestion="";
@@ -605,39 +606,51 @@ function stopNarration(){
 
 const SPOKEN_DIGITS={"零":"0","〇":"0","一":"1","二":"2","两":"2","三":"3","四":"4","五":"5","六":"6","七":"7","八":"8","九":"9"};
 function normalizeVoiceQuery(value){
-  let text=String(value||"").replace(/(?:[零〇一二两三四五六七八九]\s*){6}/g,match=>
+  let text=String(value||"").replace(/[０-９]/g,ch=>String(ch.charCodeAt(0)-65248));
+  text=text.replace(/(?:[零〇一二两三四五六七八九]\s*){6}/g,match=>
     (match.match(/[零〇一二两三四五六七八九]/g)||[]).map(ch=>SPOKEN_DIGITS[ch]).join(""));
   text=text.replace(/(?:\d[\s·-]*){6}/g,match=>match.replace(/\D/g,""));
   text=text.replace(/(?:点|\.|\bdot\b)\s*([sS])\s*([hHzZ])\b/g,(_,a,b)=>`.${a}${b}`.toUpperCase());
   return text.replace(/\s+/g," ").trim();
 }
+function bestRecognitionTranscript(result){
+  const choices=Array.from(result||[]).map(item=>normalizeVoiceQuery(item.transcript||""));
+  return choices.sort((a,b)=>(/\d{6}/.test(b)?100:0)+b.length-((/\d{6}/.test(a)?100:0)+a.length))[0]||"";
+}
 function recognitionErrorMessage(code){
   return {"not-allowed":"麦克风权限未开启，请在地址栏允许麦克风后重试","service-not-allowed":"浏览器语音识别服务不可用，请使用 Chrome 或 Edge",
-    "no-speech":"没有识别到语音","audio-capture":"没有找到可用麦克风","network":"语音识别服务连接失败，请检查网络后重试",
+    "no-speech":"没有识别到语音","audio-capture":"没有找到可用麦克风","network":"浏览器语音服务连接失败，请直接键入或稍后重试",
     "language-not-supported":"当前设备不支持普通话识别"}[code]||"语音识别失败，请改用文字输入";
 }
-function startVoiceInput(){
+function startVoiceInput(retrying=false){
   if(recognitionActive){recognition.stop();return;}
   if(window.isSecureContext===false){setVoiceStatus("语音输入需要 HTTPS 或 localhost",true);return;}
   if(!SpeechRecognitionAPI||researchRunning)return;
-  stopNarration();recognitionFailed=false;recognitionFinal="";recognitionCandidate="";
+  if(!retrying){stopNarration();recognitionFinal="";recognitionCandidate="";voiceNetworkRetries=0;}
+  recognitionFailed=false;
   recognition=new SpeechRecognitionAPI();recognition.lang="zh-CN";recognition.continuous=false;
-  recognition.interimResults=true;recognition.maxAlternatives=1;
-  recognition.onstart=()=>{recognitionActive=true;updateRecognitionButton();setVoiceStatus("正在聆听…");};
+  recognition.interimResults=true;recognition.maxAlternatives=3;
+  let retryOnEnd=false;
+  recognition.onstart=()=>{recognitionActive=true;updateRecognitionButton();setVoiceStatus(retrying?"重连成功，正在聆听…":"正在聆听…");};
   recognition.onresult=event=>{
     let interim="";
     for(let i=event.resultIndex||0;i<event.results.length;i++){
-      const transcript=event.results[i][0].transcript||"";
+      const transcript=bestRecognitionTranscript(event.results[i]);
       if(event.results[i].isFinal)recognitionFinal+=transcript+" ";else interim+=transcript;
     }
     recognitionCandidate=normalizeVoiceQuery(recognitionFinal+interim);$("#q").value=recognitionCandidate;
     setVoiceStatus(event.results[event.results.length-1]?.isFinal?"识别完成，正在提交…":"正在识别…");
   };
-  recognition.onerror=event=>{recognitionFailed=true;setVoiceStatus(recognitionErrorMessage(event.error),true);};
+  recognition.onerror=event=>{
+    recognitionFailed=true;
+    if(event.error==="network"&&voiceNetworkRetries<1){voiceNetworkRetries++;retryOnEnd=true;setVoiceStatus("语音连接中断，正在自动重试…");return;}
+    setVoiceStatus(recognitionErrorMessage(event.error),true);
+  };
   recognition.onnomatch=()=>{recognitionFailed=true;setVoiceStatus("没有识别到有效内容",true);};
   recognition.onend=()=>{
     const query=normalizeVoiceQuery(recognitionCandidate||recognitionFinal);
     recognitionActive=false;recognition=null;updateRecognitionButton();
+    if(retryOnEnd){setTimeout(()=>startVoiceInput(true),350);return;}
     if(recognitionFailed||!query)return;
     $("#q").value=query;setVoiceStatus("识别完成，正在开庭…");
     if(!voiceSubmitQueued&&!researchRunning){
@@ -884,7 +897,7 @@ function conversationTopic(question){
     const answers=turn.answers.map(item=>`${item.agent}：${item.text}`).join("\n");
     return `第 ${index+1} 轮用户：${turn.question}\n${answers}`;
   }).join("\n\n");
-  return `${conversationRoot}\n\n同一研究会话的历史：\n${history}\n\n用户最新追问：${question}\n请四个研究 Agent 分别回答最新追问，并保持原有证据标准。`;
+  return `${conversationRoot}\n\n同一研究会话的历史：\n${history}\n\n用户最新追问：${question}\n最新追问是本轮唯一主问题。请四个研究 Agent 分别直接回答它，历史只用于理解上下文；不要重复首轮总报告，并保持原有证据标准。`;
 }
 function appendRoundQuestion(question){
   const row=document.createElement("div");row.className="round-question";row.dataset.round=String(conversationRound);
@@ -1105,7 +1118,7 @@ const EX=[
 const chips=$("#chips");EX.forEach(e=>{const c=document.createElement("span");c.className="chip";c.textContent=e;
   c.onclick=()=>{$("#q").value=e;run();};chips.appendChild(c);});
 $("#go").onclick=run;$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")run();});
-$("#voiceInput").onclick=startVoiceInput;
+$("#voiceInput").onclick=()=>startVoiceInput(false);
 $("#voiceOutput").onclick=()=>setVoiceOutput(!voiceOutputEnabled);
 $("#voicePause").onclick=toggleSpeechPause;
 $("#voiceStop").onclick=stopNarration;
