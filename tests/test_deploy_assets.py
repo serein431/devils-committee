@@ -21,6 +21,7 @@ def test_systemd_service_uses_persistent_runtime_and_hardening() -> None:
     assert "User=devils" in text
     assert "Group=devils" in text
     assert "EnvironmentFile=/etc/devils-committee/devils-committee.env" in text
+    assert "Environment=HOME=/var/lib/devils-committee" in text
     assert "Environment=CACHE_DIR=/var/lib/devils-committee/cache" in text
     assert "Environment=PRECOMPUTED_DIR=/var/lib/devils-committee/precomputed" in text
     assert (
