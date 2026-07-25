@@ -1,4 +1,7 @@
 import asyncio
+import csv
+from datetime import date, timedelta
+import json
 
 from backend.skills import online as online_module
 from backend.research_request import ResearchRequest
@@ -46,6 +49,7 @@ def _bundle() -> MarketDataBundle:
         "trade_list_end",
         "index_weights",
         "index_daily",
+        "factor",
     )
     return MarketDataBundle(
         "600519.SH",
@@ -66,7 +70,7 @@ def _success(skill_id: str, bundle: MarketDataBundle) -> SkillResult:
     )
 
 
-def test_all_four_online_skills_return_one_result(monkeypatch):
+def test_all_five_online_skills_return_one_result(monkeypatch):
     bundle = _bundle()
     runner = OnlineSkillRunner()
     monkeypatch.setattr(
@@ -97,6 +101,13 @@ def test_all_four_online_skills_return_one_result(monkeypatch):
             "skill-index-rebalance-event-study", bundle
         ),
     )
+    monkeypatch.setattr(
+        runner,
+        "run_factor_ranking",
+        lambda request, bundle: _success(
+            "skill-factor-ranking-sage", bundle
+        ),
+    )
 
     results = asyncio.run(runner.run_all(_request(), bundle))
 
@@ -105,6 +116,7 @@ def test_all_four_online_skills_return_one_result(monkeypatch):
         "skill-survivorship-universe-auditor",
         "skill-portfolio-liquidity-stress-test",
         "skill-index-rebalance-event-study",
+        "skill-factor-ranking-sage",
     }
     assert all(item.dataset_hashes for item in results)
 
@@ -140,11 +152,18 @@ def test_timeout_only_marks_the_slow_skill(monkeypatch):
             "skill-index-rebalance-event-study", bundle
         ),
     )
+    monkeypatch.setattr(
+        runner,
+        "run_factor_ranking",
+        lambda request, bundle: _success(
+            "skill-factor-ranking-sage", bundle
+        ),
+    )
 
     results = asyncio.run(runner.run_all(_request(), _bundle()))
 
     assert sum(item.status == "error" for item in results) == 1
-    assert sum(item.status == "success" for item in results) == 3
+    assert sum(item.status == "success" for item in results) == 4
 
 
 def test_missing_delisting_return_never_becomes_success():
@@ -355,3 +374,75 @@ def test_index_event_missing_announcement_cannot_be_published_as_success(monkeyp
 
     assert result.status == "insufficient-evidence"
     assert "announcement_date unavailable" in result.warnings
+
+
+def _factor_records(count: int) -> list[dict]:
+    rows = []
+    current = date(2024, 1, 1)
+    for index in range(count):
+        current += timedelta(days=1)
+        rows.append(
+            {
+                "date": current.strftime("%Y%m%d"),
+                "symbol": "600519.SH",
+                "open": 100.0 + index * 0.8,
+                "close": 100.0 + index,
+                "volume": 1_000_000.0 + index * 1000,
+                "amount": 100_000_000.0 + index * 100_000,
+                "market_cap": 1_000_000_000.0 + index * 1_000_000,
+                "turnover": 0.01 + (index % 10) * 0.001,
+            }
+        )
+    return rows
+
+
+def test_factor_dataset_runs_online_mrmr_without_label_lookahead(monkeypatch):
+    records = _factor_records(80)
+    captured = {}
+    monkeypatch.setattr(
+        online_module,
+        "_read_records",
+        lambda bundle, name: records,
+    )
+
+    def fake_invoke(skill_dir, entry, args, timeout):
+        config_path = args[args.index("--input") + 1]
+        with open(config_path, encoding="utf-8") as handle:
+            config = json.load(handle)
+        with open(config["input"]["feature_path"], newline="", encoding="utf-8") as handle:
+            features = list(csv.DictReader(handle))
+        with open(config["input"]["label_path"], newline="", encoding="utf-8") as handle:
+            labels = list(csv.DictReader(handle))
+        captured.update(config=config, features=features, labels=labels)
+        return {"selected_factors": ["turnover", "close"]}
+
+    monkeypatch.setattr(online_module.cli, "invoke", fake_invoke)
+
+    result = OnlineSkillRunner().run_factor_ranking(_request(), _bundle())
+
+    assert result.status == "success"
+    assert result.mode == "cache"
+    assert result.metrics["n_obs"] == 75
+    assert result.metrics["label_horizon"] == 5
+    assert result.findings[0].claim.endswith("turnover, close")
+    expected_first_label = records[5]["close"] / records[0]["close"] - 1.0
+    assert float(captured["labels"][0]["y"]) == expected_first_label
+    dates = [row["date"] for row in captured["features"]]
+    validation = captured["config"]["validation"]
+    train_end_index = dates.index(str(validation["train_end"]))
+    valid_start_index = dates.index(str(validation["valid_start"]))
+    assert valid_start_index - train_end_index - 1 == 5
+    assert train_end_index + 5 < valid_start_index
+
+
+def test_short_factor_dataset_stays_insufficient(monkeypatch):
+    monkeypatch.setattr(
+        online_module,
+        "_read_records",
+        lambda bundle, name: _factor_records(40),
+    )
+
+    result = OnlineSkillRunner().run_factor_ranking(_request(), _bundle())
+
+    assert result.status == "insufficient-evidence"
+    assert "too short" in result.warnings[0]

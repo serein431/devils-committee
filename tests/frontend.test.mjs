@@ -189,10 +189,12 @@ window.handleEvent({ stage: "claim_start", id: "control-2", agent: "bear", side:
 document.getElementById("stageRevealAll").click();
 await window.handleEvent({
   stage: "claim_delta", id: "control-2", agent: "bear", side: "bear",
-  delta: "点击后立即显示这一整段文字",
+  delta: "点击后立即显示**这一整段**文字",
 });
 ok("show-all reveals the complete pending delta",
    document.getElementById("stageQuote").textContent === "点击后立即显示这一整段文字");
+ok("streaming stage renders bold Markdown",
+   document.querySelector("#stageQuote strong")?.textContent === "这一整段");
 
 const evidence = [{ skill: "skill-factor-ranking-sage", summary: "因子", metrics: { ic: 0.079, ir: 0.9, n_obs: 24 } }];
 const stageFrames = [];
@@ -216,7 +218,7 @@ for (const side of ["bull", "bear", "macro", "risk"]) {
   });
   window.handleEvent({
     stage: "claim", id: `${side}-1`, agent: side, side, confidence: 0.6,
-    text: side === "bull" ? "<img src=x onerror=alert(1)>看多论据" : `${side} 论据`,
+    text: side === "bull" ? "<img src=x onerror=alert(1)>看多**论据**" : `${side} 论据`,
     plain: `${side} 人话`, skills_used: ["skill-x"],
     evidence: side === "bull" ? evidence : [{ skill: "skill-y", summary: "s", metrics: { impact_bps: 97 } }],
   });
@@ -241,6 +243,9 @@ const bullHtml = document.getElementById("card-bull-1").innerHTML;
 ok("XSS payload escaped inside the compact evidence card",
    document.querySelectorAll("#card-bull-1 img").length === 0 &&
    !bullHtml.includes('src="x"') && bullHtml.includes("&lt;img"));
+ok("claim cards render bold Markdown without showing markers",
+   document.querySelector("#card-bull-1 .argue strong")?.textContent === "论据" &&
+   !document.querySelector("#card-bull-1 .argue").textContent.includes("**"));
 ok("data-viz SVG rendered for metrics", document.querySelector("#card-bull-1 .viz svg") !== null);
 ok("IC metric labelled", bullHtml.includes("因子 IC"));
 ok("beginner 人话 in DOM", bullHtml.includes("bull 人话"));
@@ -266,13 +271,15 @@ ok("severity ring drawn", document.querySelector("#verdicts .vrow .ring") !== nu
 ok("live provenance badge shown", document.querySelector("#verdicts .prov.real") !== null);
 window.handleEvent({
   stage: "audit_flag", claim_id: "risk-1", status: "missing_evidence", severity: "medium",
-  reason: "关键状态数据缺失，无法完成存活偏差检查", remediation: "补齐状态变化和期末股票列表",
+  reason: "关键**状态数据**缺失，无法完成存活偏差检查", remediation: "补齐状态变化和期末股票列表",
   plain: "资料没拿全，不能下结论", provenance: "live",
   audit_skill: "skill-survivorship-universe-auditor",
 });
 ok("missing evidence has its own audit label",
    document.getElementById("verdicts").textContent.includes("MISSING-EVIDENCE") &&
    !document.getElementById("verdicts").textContent.includes("THIN-DATA"));
+ok("audit reasons render bold Markdown",
+   document.querySelector("#verdicts .vrow:last-child .vreason strong")?.textContent === "状态数据");
 
 // unflagged claims pass on synthesize
 window.handleEvent({ stage: "synthesize" });
@@ -289,7 +296,7 @@ window.handleEvent({
         status: "open",
       },
       { topic: "数据", bull_view: "a", bear_view: "b", status: "consensus" }],
-    consensus: ["都不荐股"], risk_boundaries: ["仅供学习，不构成投资建议"],
+    consensus: ["都不**荐股**"], risk_boundaries: ["仅供**学习**，不构成投资建议"],
     disclaimer: "免责声明文本",
     meta: {
       symbol: "600519.SH", n_claims: 4, n_flags: 1, data_status: "success",
@@ -317,6 +324,9 @@ ok("long disagreement track grows with its text",
 ok("long disagreement text can wrap inside its column",
    ["anywhere", "break-word"].includes(labelStyle.overflowWrap));
 ok("risk boundaries rendered", document.querySelectorAll("#bounds li").length === 1);
+ok("summary sections render bold Markdown",
+   document.querySelector("#dmap .dcons strong")?.textContent === "荐股" &&
+   document.querySelector("#bounds strong")?.textContent === "学习");
 ok("disclaimer shown", document.getElementById("disc").textContent.includes("免责声明"));
 ok("recommendation:none bar present", document.querySelector(".recbar .k").textContent.includes("NONE"));
 ok("audit-engine badge reflects real evidence", document.getElementById("bEngine").className.includes("real"));
@@ -334,14 +344,15 @@ ok("completion does not freeze the last speaker in front",
 
 await waitFor(() => {
   const text = spoken.map(utterance => utterance.text).join("\n");
-  return text.includes("bull 人话") && text.includes("只挑高分同学") &&
+  return text.includes("看多论据") && text.includes("关键状态数据缺失") &&
     (text.includes("都不荐股") || text.includes("仅供学习"));
 }, 2000);
 const spokenText = spoken.map(utterance => utterance.text).join("\n");
-ok("claims enter the speech queue", spoken.length > 0 && spokenText.includes("bull 人话"));
-ok("audit flags enter the speech queue", spokenText.includes("只挑高分同学"));
+ok("claims narrate the detailed argument", spoken.length > 0 && spokenText.includes("看多论据"));
+ok("audit flags narrate the specific reason", spokenText.includes("关键状态数据缺失"));
 ok("result summary enters the speech queue",
    spokenText.includes("都不荐股") || spokenText.includes("仅供学习"));
+ok("narration strips Markdown markers", !spokenText.includes("**"));
 ok("narration explicitly uses Mainland Mandarin",
    spoken.every(utterance => utterance.lang === "zh-CN" && utterance.voice?.lang === "zh-CN"));
 

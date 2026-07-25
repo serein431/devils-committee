@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import json
 import math
 import os
 import tempfile
@@ -82,6 +83,17 @@ EVENT_COLUMNS = [
     "weight_before",
     "weight_after",
 ]
+FACTOR_SKILL_ID = "skill-factor-ranking-sage"
+FACTOR_FEATURES = [
+    "open",
+    "close",
+    "volume",
+    "amount",
+    "market_cap",
+    "turnover",
+]
+FACTOR_LABEL_HORIZON = 5
+MIN_FACTOR_OBSERVATIONS = 60
 
 
 def report_to_result(
@@ -657,6 +669,91 @@ def _event_rows(
     return event_rows, warning
 
 
+def _factor_inputs(
+    request: ResearchRequest,
+    bundle: MarketDataBundle,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[str],
+    dict[str, int],
+    str,
+]:
+    raw_rows = _read_records(bundle, "factor")
+    by_date: dict[str, dict[str, Any]] = {}
+    for row in raw_rows:
+        symbol = str(_first(row, "symbol", "ticker"))
+        date = _date_key(_first(row, "date", "trade_date"))
+        close = _number(_first(row, "close"), float("nan"))
+        if symbol == request.symbol and date and math.isfinite(close) and close > 0:
+            by_date[date] = row
+    ordered = [(date, by_date[date]) for date in sorted(by_date)]
+    labeled_count = len(ordered) - FACTOR_LABEL_HORIZON
+    if labeled_count < MIN_FACTOR_OBSERVATIONS:
+        return [], [], [], {}, "factor history is too short for a fixed split"
+
+    candidates: dict[str, list[float]] = {name: [] for name in FACTOR_FEATURES}
+    for _, row in ordered[:labeled_count]:
+        for name in FACTOR_FEATURES:
+            value = _number(row.get(name), float("nan"))
+            if math.isfinite(value):
+                candidates[name].append(value)
+    features = [
+        name
+        for name, values in candidates.items()
+        if len(values) >= MIN_FACTOR_OBSERVATIONS
+        and len({round(value, 12) for value in values}) > 1
+    ]
+    if not features:
+        return [], [], [], {}, "no usable numeric factor columns"
+
+    feature_rows: list[dict[str, Any]] = []
+    label_rows: list[dict[str, Any]] = []
+    for index, (date, row) in enumerate(ordered[:labeled_count]):
+        current_close = _number(row.get("close"), float("nan"))
+        future_close = _number(
+            ordered[index + FACTOR_LABEL_HORIZON][1].get("close"),
+            float("nan"),
+        )
+        if not (
+            math.isfinite(current_close)
+            and current_close > 0
+            and math.isfinite(future_close)
+        ):
+            continue
+        feature_row: dict[str, Any] = {
+            "date": date,
+            "symbol": request.symbol,
+            "available_date": date,
+        }
+        for name in features:
+            value = _number(row.get(name), float("nan"))
+            feature_row[name] = value if math.isfinite(value) else ""
+        feature_rows.append(feature_row)
+        label_rows.append(
+            {
+                "date": date,
+                "symbol": request.symbol,
+                "y": future_close / current_close - 1.0,
+            }
+        )
+
+    if len(feature_rows) < MIN_FACTOR_OBSERVATIONS:
+        return [], [], [], {}, "factor history is too short for a fixed split"
+    valid_index = int(len(feature_rows) * 0.75)
+    train_end_index = valid_index - FACTOR_LABEL_HORIZON - 1
+    if train_end_index < 2 or valid_index >= len(feature_rows):
+        return [], [], [], {}, "factor history cannot support an embargoed split"
+    split = {
+        "train_start": int(feature_rows[0]["date"]),
+        "train_end": int(feature_rows[train_end_index]["date"]),
+        "valid_start": int(feature_rows[valid_index]["date"]),
+        "valid_end": int(feature_rows[-1]["date"]),
+        "embargo_days": FACTOR_LABEL_HORIZON,
+    }
+    return feature_rows, label_rows, features, split, ""
+
+
 class OnlineSkillRunner:
     def __init__(self, timeout_sec: float = 120) -> None:
         self.timeout_sec = min(float(timeout_sec), 120.0)
@@ -799,6 +896,115 @@ class OnlineSkillRunner:
             forced_warning=warning,
         )
 
+    def run_factor_ranking(
+        self, request: ResearchRequest, bundle: MarketDataBundle
+    ) -> SkillResult:
+        missing = missing_input_result(FACTOR_SKILL_ID, bundle, ["factor"])
+        if missing is not None:
+            return missing
+        feature_rows, label_rows, features, split, warning = _factor_inputs(
+            request, bundle
+        )
+        if warning:
+            return SkillResult(
+                skill_id=FACTOR_SKILL_ID,
+                mode=bundle.mode,
+                status="insufficient-evidence",
+                duration_ms=0,
+                dataset_hashes=[bundle.datasets["factor"].sha256],
+                warnings=[warning],
+            )
+
+        skill_dir = os.path.join(CONFIG.quantskills_dir, FACTOR_SKILL_ID)
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feature_path = os.path.join(temp_dir, "features.csv")
+            label_path = os.path.join(temp_dir, "labels.csv")
+            config_path = os.path.join(temp_dir, "factor-ranking.json")
+            with open(feature_path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["date", "symbol", "available_date", *features],
+                )
+                writer.writeheader()
+                writer.writerows(feature_rows)
+            with open(label_path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=["date", "symbol", "y"]
+                )
+                writer.writeheader()
+                writer.writerows(label_rows)
+            config = {
+                "run_name": f"factor-ranking-{request.symbol.replace('.', '-')}",
+                "output_root": os.path.join(temp_dir, "output"),
+                "mode": "mrmr",
+                "selection_count": min(3, len(features)),
+                "input": {
+                    "feature_path": feature_path,
+                    "label_path": label_path,
+                },
+                "data": {
+                    "date_col": "date",
+                    "ticker_col": "symbol",
+                    "label_col": "y",
+                    "feature_include": features,
+                },
+                "validation": {"method": "fixed", **split},
+                "mrmr": {
+                    "relevance": "f",
+                    "redundancy": "c",
+                    "denominator": "mean",
+                },
+            }
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump(config, handle, ensure_ascii=False)
+            report = cli.invoke(
+                skill_dir,
+                "run_factor_selection.py",
+                ["--input", config_path],
+                timeout=max(1, int(math.ceil(self.timeout_sec))),
+            )
+        duration_ms = round((time.monotonic() - started) * 1000)
+        selected = report.get("selected_factors")
+        if not isinstance(selected, list) or not selected:
+            return SkillResult(
+                skill_id=FACTOR_SKILL_ID,
+                mode=bundle.mode,
+                status="insufficient-evidence",
+                duration_ms=duration_ms,
+                dataset_hashes=[bundle.datasets["factor"].sha256],
+                warnings=["mRMR found no factor with publishable relevance"],
+            )
+        selected_names = [str(item) for item in selected]
+        return SkillResult(
+            skill_id=FACTOR_SKILL_ID,
+            mode=bundle.mode,
+            status="success",
+            duration_ms=duration_ms,
+            dataset_hashes=[bundle.datasets["factor"].sha256],
+            assumptions=[
+                "label=5-trading-day forward return from adjusted factor close",
+                "single-security time-series ranking; not a cross-sectional backtest",
+            ],
+            metrics={
+                "n_obs": len(feature_rows),
+                "train_start": split["train_start"],
+                "train_end": split["train_end"],
+                "valid_start": split["valid_start"],
+                "valid_end": split["valid_end"],
+                "label_horizon": FACTOR_LABEL_HORIZON,
+                "selected_count": len(selected_names),
+            },
+            findings=[
+                SkillFinding(
+                    "mRMR selected factors for 5-trading-day forward return: "
+                    + ", ".join(selected_names),
+                    ["factor", "selected_factors.json", "input_manifest.json"],
+                    0.75,
+                )
+            ],
+        )
+
     async def run_all(
         self,
         request: ResearchRequest,
@@ -823,6 +1029,7 @@ class OnlineSkillRunner:
                 "skill-index-rebalance-event-study",
                 self.run_index_event,
             ),
+            (FACTOR_SKILL_ID, self.run_factor_ranking),
         ]
 
         async def one(

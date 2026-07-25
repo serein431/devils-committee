@@ -422,6 +422,8 @@
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const inlineMd=s=>esc(s).replace(/\*\*([^*\n]+?)\*\*/g,"<strong>$1</strong>");
+const speechText=s=>String(s==null?"":s).replace(/\*\*([^*\n]+?)\*\*/g,"$1").replace(/\*\*/g,"");
 const C={bull:"var(--bull)",bear:"var(--bear)",macro:"var(--macro)",risk:"var(--risk)"};
 const SIDE={bull:["BULL","多头"],bear:["BEAR","空头"],macro:["MACRO","宏观"],risk:["RISK","风控"]};
 const AVATAR_ROOT="/assets/avatars";
@@ -514,7 +516,7 @@ function speechVoice(side){
   return availableVoices[profile.voice%availableVoices.length];
 }
 function speechChunks(value,maxLength=140){
-  const text=String(value||"").replace(/\s+/g," ").trim();if(!text)return[];
+  const text=speechText(value).replace(/\s+/g," ").trim();if(!text)return[];
   const sentences=text.match(/[^。！？!?；;]+[。！？!?；;]?/g)||[text],chunks=[];
   let current="";
   sentences.forEach(sentence=>{
@@ -774,7 +776,8 @@ function resetStage(finalText=false){
   resetStreamControls(false);
   $("#stageSpeaker").textContent=finalText?"四方发言结束":"等待开庭";
   const quote=$("#stageQuote");quote.dataset.streaming="false";delete quote.dataset.claimId;
-  quote.textContent=finalText?"向下滑动，查看每条论据、审计结果和没有达成一致的地方。":"输入一个 A 股研究问题，看四个角色轮流提出证据和反驳。";
+  quote.dataset.rawText=finalText?"向下滑动，查看每条论据、审计结果和没有达成一致的地方。":"输入一个 A 股研究问题，看四个角色轮流提出证据和反驳。";
+  quote.innerHTML=inlineMd(quote.dataset.rawText);
 }
 function beginStageDebate(){
   clearTimeout(stageTimer);clearNarration();
@@ -795,13 +798,13 @@ function showStageTurn(turn){
   if(activePlayer)startStageFrames(activePlayer,turn.state);
   $("#stageSpeaker").textContent=`${tag} · ${zh}`;
   const raw=String(turn.text||"正在检查证据……").replace(/\s+/g," ").trim();
-  const quote=$("#stageQuote");quote.textContent=raw;quote.scrollTop=quote.scrollHeight;
+  const quote=$("#stageQuote");quote.dataset.rawText=raw;quote.innerHTML=inlineMd(raw);quote.scrollTop=quote.scrollHeight;
 }
 function startStageStream(item){
   clearTimeout(stageTimer);stageQueue=[];stageBusy=true;stageStreamId=item.id;
   $("#faceStage").classList.remove("is-complete","is-settled");
   showStageTurn({side:item.side,state:"speaking",text:""});
-  const quote=$("#stageQuote");quote.textContent="";quote.dataset.streaming="true";quote.dataset.claimId=item.id;
+  const quote=$("#stageQuote");quote.dataset.rawText="";quote.innerHTML="";quote.dataset.streaming="true";quote.dataset.claimId=item.id;
   resetStreamControls(true);
 }
 async function appendStageStream(item){
@@ -811,9 +814,11 @@ async function appendStageStream(item){
     await waitForStreamResume();
     if(stageStreamId!==item.id)return;
     if(streamRevealAll){
-      quote.textContent+=chars.slice(index).join("");quote.scrollTop=quote.scrollHeight;return;
+      quote.dataset.rawText=(quote.dataset.rawText||"")+chars.slice(index).join("");
+      quote.innerHTML=inlineMd(quote.dataset.rawText);quote.scrollTop=quote.scrollHeight;return;
     }
-    const char=chars[index];quote.textContent+=char;quote.scrollTop=quote.scrollHeight;
+    const char=chars[index];quote.dataset.rawText=(quote.dataset.rawText||"")+char;
+    quote.innerHTML=inlineMd(quote.dataset.rawText);quote.scrollTop=quote.scrollHeight;
     const pause=/[。！？；]/.test(char)?STREAM_CHAR_MS*2.4:STREAM_CHAR_MS;
     await new Promise(resolve=>setTimeout(resolve,pause));
   }
@@ -851,7 +856,7 @@ function playStageQueue(){
 function makeStageTurn(item,state="speaking",kind="claim"){
   const side=item.side||String(item.claim_id||"").split("-")[0]||"chair";
   const text=item.text||item.reason||item.plain||"正在检查证据……";
-  const spokenText=item.plain||item.text||item.reason||"正在检查证据……";
+  const spokenText=item.text||item.reason||item.plain||"正在检查证据……";
   let speechText=item.speechText||spokenText;
   if(!item.speechText&&kind==="claim")speechText=`${(SIDE[side]||["",""])[1]||"委员"}观点。${spokenText}`;
   if(!item.speechText&&kind==="audit")speechText=`审计提醒。${spokenText}`;
@@ -967,8 +972,8 @@ function renderAgent(c){
       <span class="conf">CONF <span class="num" style="color:${C[side]}">${conf}</span></span>
       <span class="stamp scan" id="${stampDomId(c.id)}">⟳ 审计中</span></div>
     <div class="abody">
-      ${c.plain?`<div class="plain">🗣 ${esc(c.plain)}</div>`:""}
-      <div class="argue">${esc(c.text)}</div>
+      ${c.plain?`<div class="plain">🗣 ${inlineMd(c.plain)}</div>`:""}
+      <div class="argue">${inlineMd(c.text)}</div>
       ${viz?`<div class="viz">${viz}</div>`:""}
       ${sk?`<div class="skills">${sk}</div>`:""}
     </div>`;
@@ -989,9 +994,9 @@ function renderVerdict(v,fromResult){
       <span class="vstatus" style="color:${col}">⚑ ${esc((SIDE[String(v.claim_id).split("-")[0]]||[""])[0]||v.claim_id)} · ${esc(en)}</span>
       <span class="prov ${real?'real':''}">${real?esc(String(v.provenance).toUpperCase())+' · QuantSkills':'MOCK'}</span>
       <span class="dim" style="font-size:10px">SEV ${(v.severity||'-').toUpperCase()}</span></div>
-      <div class="vreason">${esc(v.reason)}</div>
-      ${v.plain?`<div class="vplain">🗣 ${esc(v.plain)}</div>`:""}
-      ${v.remediation?`<div class="vrem">${esc(v.remediation)}</div>`:""}</div>`;
+      <div class="vreason">${inlineMd(v.reason)}</div>
+      ${v.plain?`<div class="vplain">🗣 ${inlineMd(v.plain)}</div>`:""}
+      ${v.remediation?`<div class="vrem">${inlineMd(v.remediation)}</div>`:""}</div>`;
   $("#verdicts").appendChild(row);
 }
 
@@ -1027,14 +1032,14 @@ function renderResult(r){
   (r.open_disagreements||[]).forEach(p=>{
     const open=p.status==="open";
     dm.insertAdjacentHTML("beforeend",`<div class="drow">
-      <div class="dtop"><span class="dtopic">${esc(p.topic)}</span>
+      <div class="dtop"><span class="dtopic">${inlineMd(p.topic)}</span>
         <span class="dpill ${open?'open':'cons'}">${open?'◐ 未达成一致':'● 已收敛'}</span></div>
       <div class="track ${open?'opened':''}"><div class="mid"></div>
-        <div class="lab l">${esc(p.bull_view)}</div><div class="lab r">${esc(p.bear_view)}</div></div></div>`);
+        <div class="lab l">${inlineMd(p.bull_view)}</div><div class="lab r">${inlineMd(p.bear_view)}</div></div></div>`);
   });
   if((r.consensus||[]).length){
     dm.insertAdjacentHTML("beforeend",`<div class="dcons"><b>双方共识 ▸</b> `+
-      r.consensus.map(esc).join(" &nbsp;·&nbsp; ")+`</div>`);}
+      r.consensus.map(inlineMd).join(" &nbsp;·&nbsp; ")+`</div>`);}
   const open=(r.open_disagreements||[]).filter(p=>p.status==="open").length;
   const cons=(r.open_disagreements||[]).length-open;
   $("#mapH").innerHTML=`分歧地图 · DISAGREEMENT MAP<span class="r"></span>`+
@@ -1042,8 +1047,8 @@ function renderResult(r){
 
   // boundaries + disclaimer
   $("#bounds").innerHTML="";(r.risk_boundaries||[]).forEach(b=>{
-    const li=document.createElement("li");li.textContent=b;$("#bounds").appendChild(li);});
-  $("#disc").textContent=r.disclaimer||"";
+    const li=document.createElement("li");li.innerHTML=inlineMd(b);$("#bounds").appendChild(li);});
+  $("#disc").innerHTML=inlineMd(r.disclaimer||"");
   const skillResults=Array.isArray(man.results)?man.results:[];
   const skillTrace=skillResults.map(s=>`${s.skill_id||'?'}[${s.status||'unknown'}/${s.mode||'unknown'}]`);
   $("#trace").textContent=`TRACE ▸ 数据 ${data.symbol||m.symbol||'—'} · 状态 ${dataStatus} · 模式 ${data.mode||'unknown'} · QuantSkills: `+
