@@ -25,7 +25,7 @@ def test_systemd_service_uses_persistent_runtime_and_hardening() -> None:
     assert "Environment=PRECOMPUTED_DIR=/var/lib/devils-committee/precomputed" in text
     assert (
         "ExecStart=/opt/devils-committee/.venv-real/bin/uvicorn "
-        "backend.a2a_server:app --host 127.0.0.1 --port 18080 --workers 1"
+        "backend.a2a_server:app --host 127.0.0.1 --port 18081 --workers 1"
     ) in text
     assert "Restart=always" in text
     assert "NoNewPrivileges=true" in text
@@ -47,7 +47,7 @@ def test_nginx_template_proxies_public_routes_without_embedded_secrets() -> None
     assert "/etc/letsencrypt/live/${PUBLIC_HOST}/fullchain.pem" in text
     assert "/etc/letsencrypt/live/${PUBLIC_HOST}/privkey.pem" in text
     assert "client_max_body_size 2m;" in text
-    assert "proxy_pass http://127.0.0.1:18080;" in text
+    assert "proxy_pass http://127.0.0.1:18081;" in text
     assert "proxy_read_timeout 610s;" in text
     assert "proxy_send_timeout 610s;" in text
     assert "proxy_buffering off;" in text
