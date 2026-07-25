@@ -19,6 +19,8 @@ def _configure_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(setup_real, "ROOT", tmp_path)
     monkeypatch.setattr(setup_real, "ENV", tmp_path / ".env")
     monkeypatch.setattr(setup_real, "ENV_EXAMPLE", tmp_path / ".env.example")
+    for key in setup_real.CONFIG_KEYS:
+        monkeypatch.delenv(key, raising=False)
     (tmp_path / ".env.example").write_text("LLM_MODE=mock\n", encoding="utf-8")
 
 

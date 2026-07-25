@@ -8,10 +8,22 @@ import copy
 
 import pytest
 
-os.environ["DATA_MODE"] = "mock"
-os.environ["LLM_MODE"] = "mock"
-os.environ["SKILL_MODE"] = "mock"
-os.environ.pop("LLM_API_KEY", None)
+if os.environ.get("RUN_LIVE_INTEGRATION") != "1":
+    os.environ["DATA_MODE"] = "mock"
+    os.environ["LLM_MODE"] = "mock"
+    os.environ["SKILL_MODE"] = "mock"
+    os.environ["LLM_MODEL_LABEL"] = "DeepSeek V4 Pro"
+    for key in (
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "DEFAULT_USERNAME",
+        "DEFAULT_PASSWORD",
+        "A2A_BEARER_TOKEN",
+        "BUILD_COMMIT",
+    ):
+        # Empty values prevent backend.config's setdefault-based .env loader
+        # from importing live credentials into the ordinary test process.
+        os.environ[key] = ""
 
 from backend.research_request import ResearchRequest
 from backend.skills.contracts import (

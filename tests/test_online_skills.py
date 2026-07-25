@@ -157,6 +157,29 @@ def test_missing_delisting_return_never_becomes_success():
     assert "delisting_return" in " ".join(result.warnings)
 
 
+def test_missing_adjustment_dataset_is_insufficient_not_error():
+    bundle = _bundle()
+    bundle.datasets.pop("adj_factor")
+
+    result = OnlineSkillRunner().run_adjustments(_request(), bundle)
+
+    assert result.status == "insufficient-evidence"
+    assert result.warnings == ["adj_factor dataset unavailable"]
+
+
+def test_missing_survivorship_datasets_are_insufficient_not_error():
+    bundle = _bundle()
+    bundle.datasets.pop("trade_list_start")
+    bundle.datasets.pop("status_change")
+
+    result = OnlineSkillRunner().run_survivorship(_request(), bundle)
+
+    assert result.status == "insufficient-evidence"
+    assert result.warnings == [
+        "status_change and trade_list_start datasets unavailable"
+    ]
+
+
 def test_liquidity_defaults_are_labeled_as_assumptions():
     params, assumptions = liquidity_parameters(_request(), avg_amount=20_000_000.0)
 

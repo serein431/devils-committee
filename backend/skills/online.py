@@ -170,6 +170,25 @@ def error_result(
     )
 
 
+def missing_input_result(
+    skill_id: str,
+    bundle: MarketDataBundle,
+    required_datasets: list[str],
+) -> SkillResult | None:
+    missing = [name for name in required_datasets if name not in bundle.datasets]
+    if not missing:
+        return None
+    noun = "dataset" if len(missing) == 1 else "datasets"
+    return SkillResult(
+        skill_id=skill_id,
+        mode=bundle.mode,
+        status="insufficient-evidence",
+        duration_ms=0,
+        dataset_hashes=bundle.dataset_hashes,
+        warnings=[f"{' and '.join(missing)} {noun} unavailable"],
+    )
+
+
 def _read_records(bundle: MarketDataBundle, name: str) -> list[dict[str, Any]]:
     artifact = bundle.datasets.get(name)
     if artifact is None:
@@ -577,6 +596,13 @@ class OnlineSkillRunner:
     def run_adjustments(
         self, request: ResearchRequest, bundle: MarketDataBundle
     ) -> SkillResult:
+        missing = missing_input_result(
+            "skill-corporate-action-adjustment-auditor",
+            bundle,
+            ["daily", "daily_post", "adj_factor"],
+        )
+        if missing is not None:
+            return missing
         rows, warning = _adjustment_rows(request, bundle)
         return self._run(
             "skill-corporate-action-adjustment-auditor",
@@ -589,6 +615,13 @@ class OnlineSkillRunner:
     def run_survivorship(
         self, request: ResearchRequest, bundle: MarketDataBundle
     ) -> SkillResult:
+        missing = missing_input_result(
+            "skill-survivorship-universe-auditor",
+            bundle,
+            ["status_change", "trade_list_start", "trade_list_end"],
+        )
+        if missing is not None:
+            return missing
         rows, warning = _universe_rows(request, bundle)
         return self._run(
             "skill-survivorship-universe-auditor",

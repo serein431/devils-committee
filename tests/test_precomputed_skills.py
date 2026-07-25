@@ -316,6 +316,7 @@ def test_precompute_configs_use_required_research_settings(tmp_path, monkeypatch
     hpo_path = precompute_research.write_hpo_config(
         str(tmp_path / "inputs" / "features.csv"),
         str(tmp_path / "inputs" / "labels.csv"),
+        str(tmp_path / "inputs" / "universe.csv"),
     )
     factor = json.loads(Path(factor_path).read_text(encoding="utf-8"))
     hpo = json.loads(Path(hpo_path).read_text(encoding="utf-8"))["config"]
@@ -330,13 +331,87 @@ def test_precompute_configs_use_required_research_settings(tmp_path, monkeypatch
         "method": "fixed",
         "train_start": 20240101,
         "train_end": 20250131,
-        "valid_start": 20250210,
+        "valid_start": 20250213,
         "valid_end": 20251231,
-        "embargo_days": 5,
+        "embargo_days": 6,
     }
+    assert hpo["validation"]["valid_start"] == 20250213
+    assert hpo["validation"]["test_start"] == 20260113
+    assert hpo["validation"]["embargo_days"] == 6
+    assert hpo["time"]["trade_lag_days"] == 1
     assert hpo["data"]["strict_point_in_time"] is True
+    assert hpo["data"]["universe_path"] == str(tmp_path / "inputs" / "universe.csv")
     assert hpo["search"]["method"] == "adaptive_tpe"
     assert hpo["evaluation"]["objective"] == "rankic_ir"
+
+
+def test_forward_labels_start_next_trading_day_and_hold_five_days():
+    pd = pytest.importorskip("pandas")
+    from scripts import precompute_research
+
+    prices = pd.DataFrame(
+        {
+            "date": [20240101, 20240102, 20240103, 20240104, 20240105, 20240108, 20240109],
+            "symbol": ["600519.SH"] * 7,
+            "close": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0],
+        }
+    )
+
+    labelled = precompute_research.add_forward_labels(prices)
+
+    first = labelled.iloc[0]
+    assert first["label_start_date"] == 20240102
+    assert first["label_end_date"] == 20240109
+    assert first["y"] == pytest.approx(16.0 / 11.0 - 1.0)
+
+
+def test_collect_result_keeps_symbol_universe_and_hashes_universe_file(tmp_path, monkeypatch):
+    from scripts import precompute_research
+
+    monkeypatch.setattr(
+        precompute_research,
+        "CONFIG",
+        SimpleNamespace(precomputed_dir=str(tmp_path)),
+    )
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    feature_path = inputs / "features.csv"
+    label_path = inputs / "labels.csv"
+    universe_path = inputs / "universe.csv"
+    feature_path.write_text("date,symbol,x\n20240101,600519.SH,1\n", encoding="utf-8")
+    label_path.write_text("date,symbol,y\n20240101,600519.SH,0.1\n", encoding="utf-8")
+    universe_path.write_text(
+        "date,symbol,in_universe\n20240101,600519.SH,true\n",
+        encoding="utf-8",
+    )
+    raw = tmp_path / FACTOR_SKILL / "raw" / "run-1"
+    raw.mkdir(parents=True)
+    (raw / "selected_factors.json").write_text(
+        json.dumps({"selected_factors": ["x"], "n_obs": 1}),
+        encoding="utf-8",
+    )
+    (raw / "run_manifest.json").write_text(
+        json.dumps({"num_rows": 1}),
+        encoding="utf-8",
+    )
+
+    precompute_research.collect_result(
+        FACTOR_SKILL,
+        ["dataset-hash"],
+        "commit-hash",
+        ["600519.SH"],
+        str(feature_path),
+        str(label_path),
+        str(universe_path),
+    )
+
+    manifest = json.loads(
+        (tmp_path / FACTOR_SKILL / "devils-committee-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["universe"] == ["600519.SH"]
+    assert "inputs/universe.csv" in manifest["source_files"]
 
 
 def test_precompute_writer_rejects_path_outside_root(tmp_path, monkeypatch):

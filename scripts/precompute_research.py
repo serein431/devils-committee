@@ -45,6 +45,18 @@ _COMMANDS = {
 }
 
 
+def add_forward_labels(prices: Any) -> Any:
+    """Label a signal with next-session entry and a five-session holding period."""
+    labelled = prices.sort_values(["symbol", "date"]).copy()
+    grouped = labelled.groupby("symbol")
+    entry_close = grouped["close"].shift(-1)
+    exit_close = grouped["close"].shift(-6)
+    labelled["label_start_date"] = grouped["date"].shift(-1)
+    labelled["label_end_date"] = grouped["date"].shift(-6)
+    labelled["y"] = exit_close / entry_close - 1.0
+    return labelled
+
+
 def _precomputed_root() -> Path:
     root = Path(CONFIG.precomputed_dir).expanduser()
     if not root.is_absolute():
@@ -98,7 +110,7 @@ def _safe_source_file(path: str | Path) -> Path:
 def build_factor_tables(
     request: ResearchRequest,
     symbols: list[str],
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, str, list[str]]:
     """Build one cross-sectional factor table and its five-day return labels."""
     try:
         import pandas as pd  # type: ignore
@@ -120,13 +132,17 @@ def build_factor_tables(
             prices = pd.read_parquet(bundle.datasets["daily_post"].path)[
                 ["date", "symbol", "close"]
             ]
-            prices = prices.sort_values(["symbol", "date"])
-            prices["y"] = (
-                prices.groupby("symbol")["close"].shift(-5) / prices["close"]
-                - 1.0
-            )
+            prices = add_forward_labels(prices)
             merged = factor.merge(
-                prices[["date", "symbol", "y"]],
+                prices[
+                    [
+                        "date",
+                        "symbol",
+                        "y",
+                        "label_start_date",
+                        "label_end_date",
+                    ]
+                ],
                 on=["date", "symbol"],
                 how="inner",
             )
@@ -139,13 +155,23 @@ def build_factor_tables(
 
     if not frames:
         raise RuntimeError(_DATA_UNAVAILABLE)
-    combined = pd.concat(frames, ignore_index=True).dropna(subset=["y"])
+    combined = pd.concat(frames, ignore_index=True).dropna(
+        subset=["y", "label_end_date"]
+    )
     if len(combined) == 0:
         raise RuntimeError(_DATA_UNAVAILABLE)
+    combined["available_date"] = combined["date"]
 
     output = _safe_output_dir(_precomputed_root() / "inputs")
+    metadata_cols = {
+        "y",
+        "name",
+        "available_date",
+        "label_start_date",
+        "label_end_date",
+    }
     feature_cols = [
-        column for column in combined.columns if column not in {"y", "name"}
+        column for column in combined.columns if column not in metadata_cols
     ]
     if not {"date", "symbol"} <= set(feature_cols):
         raise RuntimeError(_DATA_UNAVAILABLE)
@@ -157,9 +183,18 @@ def build_factor_tables(
 
     feature_path = _safe_output_path(output / "features.csv")
     label_path = _safe_output_path(output / "labels.csv")
-    combined[["date", "symbol", *factor_cols]].to_csv(feature_path, index=False)
-    combined[["date", "symbol", "y"]].to_csv(label_path, index=False)
-    return str(feature_path), str(label_path), sorted(hashes)
+    universe_path = _safe_output_path(output / "universe.csv")
+    combined[["date", "symbol", "available_date", *factor_cols]].to_csv(
+        feature_path,
+        index=False,
+    )
+    combined[
+        ["date", "symbol", "y", "label_start_date", "label_end_date"]
+    ].to_csv(label_path, index=False)
+    universe = combined[["date", "symbol"]].drop_duplicates().copy()
+    universe["in_universe"] = True
+    universe.to_csv(universe_path, index=False)
+    return str(feature_path), str(label_path), str(universe_path), sorted(hashes)
 
 
 def write_json_file(path: Path, payload: dict[str, Any]) -> str:
@@ -197,9 +232,9 @@ def write_factor_config(feature_path: str, label_path: str) -> str:
                 "method": "fixed",
                 "train_start": 20240101,
                 "train_end": 20250131,
-                "valid_start": 20250210,
+                "valid_start": 20250213,
                 "valid_end": 20251231,
-                "embargo_days": 5,
+                "embargo_days": 6,
             },
             "mrmr": {
                 "relevance": "f",
@@ -210,7 +245,7 @@ def write_factor_config(feature_path: str, label_path: str) -> str:
     )
 
 
-def write_hpo_config(feature_path: str, label_path: str) -> str:
+def write_hpo_config(feature_path: str, label_path: str, universe_path: str) -> str:
     root = _precomputed_root()
     output_root = _safe_output_dir(root / HPO_SKILL / "raw")
     return write_json_file(
@@ -232,6 +267,7 @@ def write_hpo_config(feature_path: str, label_path: str) -> str:
                     "date_col": "date",
                     "ticker_col": "symbol",
                     "label_col": "y",
+                    "universe_path": universe_path,
                     "strict_point_in_time": True,
                     "compute_hash": True,
                 },
@@ -274,14 +310,15 @@ def write_hpo_config(feature_path: str, label_path: str) -> str:
                     "method": "fixed_train_valid_test",
                     "train_start": 20240101,
                     "train_end": 20250131,
-                    "valid_start": 20250210,
+                    "valid_start": 20250213,
                     "valid_end": 20251231,
-                    "test_start": 20260112,
+                    "test_start": 20260113,
                     "test_end": 20260724,
-                    "embargo_days": 5,
+                    "embargo_days": 6,
                     "min_assets_per_date": 5,
                 },
                 "training": {"label_window": 5},
+                "time": {"trade_lag_days": 1},
                 "evaluation": {
                     "inner_loop": "fast_evaluator",
                     "objective": "rankic_ir",
@@ -375,6 +412,7 @@ def collect_result(
     universe: list[str],
     feature_path: str,
     label_path: str,
+    universe_path: str,
 ) -> None:
     root = _safe_output_dir(_precomputed_root() / skill_id)
     raw_root = _safe_output_dir(root / "raw")
@@ -395,7 +433,7 @@ def collect_result(
                 ),
                 "train_start": "20240101",
                 "train_end": "20250131",
-                "valid_start": "20250210",
+                "valid_start": "20250213",
                 "valid_end": "20251231",
             },
             "warnings": [],
@@ -439,6 +477,7 @@ def collect_result(
 
     feature = _safe_source_file(feature_path)
     label = _safe_source_file(label_path)
+    universe_file = _safe_source_file(universe_path)
     precomputed_root = _precomputed_root()
     write_json_file(root / "result.json", payload)
     write_json_file(
@@ -455,6 +494,9 @@ def collect_result(
                 label.resolve().relative_to(precomputed_root).as_posix(): (
                     file_sha256(label)
                 ),
+                universe_file.resolve().relative_to(precomputed_root).as_posix(): (
+                    file_sha256(universe_file)
+                ),
             },
             "result_file": "result.json",
         },
@@ -470,7 +512,7 @@ def main() -> int:
         end_date=os.environ.get("PRECOMPUTE_END", "20260724"),
     )
     try:
-        feature_path, label_path, hashes = build_factor_tables(
+        feature_path, label_path, universe_path, hashes = build_factor_tables(
             request,
             DEFAULT_UNIVERSE,
         )
@@ -480,7 +522,7 @@ def main() -> int:
 
     try:
         factor_config = write_factor_config(feature_path, label_path)
-        hpo_config = write_hpo_config(feature_path, label_path)
+        hpo_config = write_hpo_config(feature_path, label_path, universe_path)
         run_precompute_command(
             FACTOR_SKILL,
             "run_factor_selection.py",
@@ -499,6 +541,7 @@ def main() -> int:
             DEFAULT_UNIVERSE,
             feature_path,
             label_path,
+            universe_path,
         )
         collect_result(
             HPO_SKILL,
@@ -507,6 +550,7 @@ def main() -> int:
             DEFAULT_UNIVERSE,
             feature_path,
             label_path,
+            universe_path,
         )
     except (OSError, RuntimeError, ValueError):
         print("precompute stopped: QuantSkills unavailable")
