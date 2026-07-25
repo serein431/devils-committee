@@ -87,7 +87,7 @@ def test_audit_prefers_cited_domain_failure_over_uncited_missing_skill(
     )
 
 
-def test_claim_without_mapped_independent_auditor_is_not_marked_pass(
+def test_successful_claim_without_specialized_auditor_is_not_marked_missing(
     evidence_fixture,
 ):
     claims = asyncio.run(BearAgent(MockLLM()).argue(evidence_fixture))
@@ -95,8 +95,9 @@ def test_claim_without_mapped_independent_auditor_is_not_marked_pass(
         AuditAgent(MockLLM()).audit(evidence_fixture, claims)
     )
 
-    assert verdicts[0].status == "missing_evidence"
-    assert "没有映射到独立审计器" in verdicts[0].reason
+    assert verdicts[0].status == "pass"
+    assert verdicts[0].audit_skill == "skill-portfolio-liquidity-stress-test"
+    assert "已成功执行" in verdicts[0].reason
 
 
 def test_audit_does_not_turn_missing_evidence_into_pass(

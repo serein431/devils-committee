@@ -189,6 +189,12 @@ class AuditAgent(_Base):
                 if skill_id in evidence.results
                 and skill_id in claim.skills_used
             ]
+            successful_claim_results = [
+                evidence.results[skill_id]
+                for skill_id in claim.skills_used
+                if skill_id in evidence.results
+                and evidence.results[skill_id].status == "success"
+            ]
             unavailable = next(
                 (
                     item
@@ -226,12 +232,22 @@ class AuditAgent(_Base):
                 source, severity = flagged, "medium"
             elif relevant:
                 status, source, severity = "pass", None, "none"
+            elif successful_claim_results:
+                status, source, severity = (
+                    "pass",
+                    successful_claim_results[0],
+                    "none",
+                )
             else:
                 status, source, severity = "missing_evidence", None, "medium"
 
             detail = source.to_dict() if source else {}
             if status == "pass":
-                reason = "现有独立审计结果没有指出可发布的问题。"
+                reason = (
+                    f"{source.skill_id} 已成功执行，当前结果未报告需要驳回的领域异常。"
+                    if source
+                    else "现有独立审计结果没有指出可发布的问题。"
+                )
             elif source is None:
                 reason = (
                     "该论据引用的 Skill 当前没有映射到独立审计器，"

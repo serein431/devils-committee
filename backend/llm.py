@@ -197,6 +197,8 @@ class OpenAICompatLLM:
             "rows 是输入观察行数，不是公司行动或异常数量；finding_count 才是发现数量。"
             "outcome=fail 或存在 findings 时必须明确说明异常，绝不能写成全部验证通过。"
             "outcome=fail 的证据不能被包装成多头支撑，只能说明风险、异常和待核对项。"
+            "不得猜测异常由分红、拆股、配股等具体事件造成，也不得把少量异常升级成系统性偏差；"
+            "除非证据明确给出原因或范围。数据异常不等同于公司基本面利空。"
             "用简体中文，3~5 句，口语但有据。"
         )
         user = f"标的：{symbol}\n量化证据（QuantSkills 输出）：\n{json.dumps(evidence, ensure_ascii=False, indent=2)}"
