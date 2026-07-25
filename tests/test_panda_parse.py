@@ -140,6 +140,19 @@ def _install_fake_panda(monkeypatch, daily=None, daily_error=None):
     return module
 
 
+def test_sz_symbol_uses_documented_a_share_trade_list_selector():
+    from backend.skills.panda import DATASET_CALLS
+
+    request = _request(symbol="300750.SZ")
+
+    start_method, start_params = DATASET_CALLS["trade_list_start"]
+    end_method, end_params = DATASET_CALLS["trade_list_end"]
+
+    assert start_method == end_method == "get_trade_list"
+    assert start_params(request) == {"date": "20240101", "exchange": "SH"}
+    assert end_params(request) == {"date": "20240131", "exchange": "SH"}
+
+
 def test_empty_live_daily_is_insufficient_and_never_mock(monkeypatch, tmp_path):
     panda, _ = _panda_mode(monkeypatch, tmp_path)
     _install_fake_panda(monkeypatch, daily=_FakeFrame([]))

@@ -18,6 +18,10 @@ from .contracts import DatasetArtifact, MarketDataBundle
 
 ParamsFactory = Callable[[ResearchRequest], dict[str, Any]]
 
+# PandaData uses "SH" as the A-share market selector here and returns both
+# Shanghai and Shenzhen symbols. The endpoint does not accept "SZ".
+A_SHARE_TRADE_LIST_EXCHANGE = "SH"
+
 DATASET_CALLS: dict[str, tuple[str, ParamsFactory]] = {
     "daily": (
         "get_stock_daily",
@@ -80,11 +84,17 @@ DATASET_CALLS: dict[str, tuple[str, ParamsFactory]] = {
     ),
     "trade_list_start": (
         "get_trade_list",
-        lambda r: {"date": r.start_date, "exchange": r.symbol[-2:]},
+        lambda r: {
+            "date": r.start_date,
+            "exchange": A_SHARE_TRADE_LIST_EXCHANGE,
+        },
     ),
     "trade_list_end": (
         "get_trade_list",
-        lambda r: {"date": r.end_date, "exchange": r.symbol[-2:]},
+        lambda r: {
+            "date": r.end_date,
+            "exchange": A_SHARE_TRADE_LIST_EXCHANGE,
+        },
     ),
     "index_weights": (
         "get_index_weights",
