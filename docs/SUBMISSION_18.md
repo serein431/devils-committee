@@ -76,7 +76,7 @@
 ```bash
 python3.12 -m venv .venv-real
 .venv-real/bin/pip install -r requirements-real.txt
-./scripts/fetch_quantskills.sh
+git submodule update --init --recursive
 .venv-real/bin/python scripts/setup_real.py --check
 ```
 有效凭证只能放在本机 `.env` 或部署平台的私密配置中。

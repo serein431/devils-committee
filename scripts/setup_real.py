@@ -104,6 +104,10 @@ def _precomputed_root(env: dict[str, str]) -> Path:
     return _configured_path(env, "PRECOMPUTED_DIR", "./var/precomputed")
 
 
+def _repository_ready(path: Path) -> bool:
+    return (path / ".git").exists() and (path / "scripts").is_dir()
+
+
 def _numeric_config_ready(env: dict[str, str]) -> bool:
     try:
         temperature = float(
@@ -137,8 +141,7 @@ def _checks(env: dict[str, str]) -> dict[str, bool]:
             env.get(key) for key in ("DEFAULT_USERNAME", "DEFAULT_PASSWORD")
         ),
         "seven_skill_repositories": all(
-            (skill_root / name / ".git").is_dir()
-            and (skill_root / name / "scripts").is_dir()
+            _repository_ready(skill_root / name)
             for name in REPOS
         ),
         "precomputed_manifests": all(
@@ -166,13 +169,12 @@ def _report(env: dict[str, str]) -> dict[str, bool]:
     qdir = _repo_root(env)
     for repo in REPOS:
         path = qdir / repo
-        print(f"{repo}: {_state((path / '.git').is_dir() and (path / 'scripts').is_dir())}")
+        print(f"{repo}: {_state(_repository_ready(path))}")
     return checks
 
 
 def _repo_ready(env: dict[str, str], repo: str) -> bool:
-    path = _repo_root(env) / repo
-    return (path / ".git").is_dir() and (path / "scripts").is_dir()
+    return _repository_ready(_repo_root(env) / repo)
 
 
 def _missing_prerequisites(modes: list[str], env: dict[str, str]) -> list[str]:

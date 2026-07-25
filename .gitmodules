@@ -1,0 +1,21 @@
+[submodule "vendor/quantskills/skill-pandadata-api"]
+	path = vendor/quantskills/skill-pandadata-api
+	url = https://github.com/quantskills/skill-pandadata-api.git
+[submodule "vendor/quantskills/skill-corporate-action-adjustment-auditor"]
+	path = vendor/quantskills/skill-corporate-action-adjustment-auditor
+	url = https://github.com/quantskills/skill-corporate-action-adjustment-auditor.git
+[submodule "vendor/quantskills/skill-survivorship-universe-auditor"]
+	path = vendor/quantskills/skill-survivorship-universe-auditor
+	url = https://github.com/quantskills/skill-survivorship-universe-auditor.git
+[submodule "vendor/quantskills/skill-portfolio-liquidity-stress-test"]
+	path = vendor/quantskills/skill-portfolio-liquidity-stress-test
+	url = https://github.com/quantskills/skill-portfolio-liquidity-stress-test.git
+[submodule "vendor/quantskills/skill-index-rebalance-event-study"]
+	path = vendor/quantskills/skill-index-rebalance-event-study
+	url = https://github.com/quantskills/skill-index-rebalance-event-study.git
+[submodule "vendor/quantskills/skill-factor-ranking-sage"]
+	path = vendor/quantskills/skill-factor-ranking-sage
+	url = https://github.com/quantskills/skill-factor-ranking-sage.git
+[submodule "vendor/quantskills/skill-model-hpo-evidence-driven"]
+	path = vendor/quantskills/skill-model-hpo-evidence-driven
+	url = https://github.com/quantskills/skill-model-hpo-evidence-driven.git

@@ -86,7 +86,7 @@ def main() -> None:
     add("```bash")
     add("python3.12 -m venv .venv-real")
     add(".venv-real/bin/pip install -r requirements-real.txt")
-    add("./scripts/fetch_quantskills.sh")
+    add("git submodule update --init --recursive")
     add(".venv-real/bin/python scripts/setup_real.py --check")
     add("```")
     add("")

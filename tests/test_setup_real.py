@@ -86,3 +86,15 @@ def test_report_rejects_a_repository_directory_without_git_and_scripts(monkeypat
     setup_real._report({"QUANTSKILLS_DIR": "./vendor/quantskills"})
 
     assert f"{setup_real.REPOS[0]}: missing" in capsys.readouterr().out
+
+
+def test_report_accepts_a_checked_out_git_submodule(monkeypatch, tmp_path, capsys):
+    _configure_paths(monkeypatch, tmp_path)
+    repo = tmp_path / "vendor" / "quantskills" / setup_real.REPOS[0]
+    repo.mkdir(parents=True)
+    (repo / ".git").write_text("gitdir: ../../.git/modules/example\n", encoding="utf-8")
+    (repo / "scripts").mkdir()
+
+    setup_real._report({"QUANTSKILLS_DIR": "./vendor/quantskills"})
+
+    assert f"{setup_real.REPOS[0]}: present" in capsys.readouterr().out
