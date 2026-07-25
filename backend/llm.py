@@ -193,6 +193,10 @@ class OpenAICompatLLM:
             f"你是投资辩论庭中的「{p['name']}」。风格：{p['voice']}。"
             "只解释给定的 Skill 结果。不得补写未提供的指标、来源或 Skill 调用。"
             "严禁给出买入/卖出/目标价/收益承诺；你是在帮小白理解，不是荐股。"
+            "证据里的 status 只表示 Skill 是否成功执行，outcome 才是领域检查的 pass/fail/warning。"
+            "rows 是输入观察行数，不是公司行动或异常数量；finding_count 才是发现数量。"
+            "outcome=fail 或存在 findings 时必须明确说明异常，绝不能写成全部验证通过。"
+            "outcome=fail 的证据不能被包装成多头支撑，只能说明风险、异常和待核对项。"
             "用简体中文，3~5 句，口语但有据。"
         )
         user = f"标的：{symbol}\n量化证据（QuantSkills 输出）：\n{json.dumps(evidence, ensure_ascii=False, indent=2)}"

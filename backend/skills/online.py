@@ -41,6 +41,10 @@ ONLINE_SKILLS: dict[str, tuple[str, list[str]]] = {
     ),
 }
 
+_GENERIC_FINDING_IMPACT = (
+    "Review the domain result and confirm whether the issue changes the research conclusion."
+)
+
 ADJUSTMENT_COLUMNS = [
     "symbol",
     "date",
@@ -110,7 +114,12 @@ def report_to_result(
             reason_text = ", ".join(str(reason) for reason in reasons)
         else:
             reason_text = str(reasons) if reasons else ""
-        claim = item.get("impact") or reason_text or "QuantSkills finding"
+        impact = item.get("impact")
+        claim = (
+            reason_text
+            if impact == _GENERIC_FINDING_IMPACT and reason_text
+            else impact or reason_text or "QuantSkills finding"
+        )
         refs = [
             str(value)
             for value in evidence.values()
@@ -122,14 +131,18 @@ def report_to_result(
     if forced_warning:
         warnings.append(forced_warning)
     metrics = report.get("metrics") or report.get("input_summary") or {}
+    metrics = dict(metrics) if isinstance(metrics, dict) else {}
+    if findings:
+        metrics.setdefault("finding_count", len(findings))
     return SkillResult(
         skill_id=skill_id,
         mode=mode,  # type: ignore[arg-type]
         status=status,
         duration_ms=duration_ms,
         dataset_hashes=sorted(set(dataset_hashes)),
+        outcome=raw_status if raw_status in {"pass", "fail", "warning"} else None,
         assumptions=list(assumptions or []),
-        metrics=dict(metrics) if isinstance(metrics, dict) else {},
+        metrics=metrics,
         findings=findings,
         warnings=warnings,
     )

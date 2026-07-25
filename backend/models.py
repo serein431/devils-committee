@@ -31,6 +31,7 @@ class Evidence:
     summary: str
     status: str
     mode: str
+    outcome: str | None = None
     dataset_hashes: list[str] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -42,6 +43,7 @@ class Evidence:
         summary: str = "",
         status: str = "success",
         mode: str = "mock",
+        outcome: str | None = None,
         dataset_hashes: list[str] | None = None,
         evidence_refs: list[str] | None = None,
         metrics: dict[str, Any] | None = None,
@@ -60,6 +62,7 @@ class Evidence:
         self.summary = summary
         self.status = status
         self.mode = mode
+        self.outcome = outcome
         self.dataset_hashes = list(dataset_hashes or [])
         self.evidence_refs = list(evidence_refs or [])
         self.metrics = dict(metrics or {})
@@ -78,8 +81,15 @@ class Evidence:
 def evidence_from_result(result: SkillResult) -> Evidence:
     """Project a SkillResult without adding claims, metrics or sources."""
 
-    summaries = [item.claim for item in result.findings]
-    summary = "；".join(summaries[:2]) or "该项没有可发布的结论"
+    summaries = list(dict.fromkeys(item.claim for item in result.findings))
+    if summaries:
+        summary = "；".join(summaries[:2])
+    elif result.outcome == "pass":
+        summary = "该项检查已完成，未发现其定义范围内的问题"
+    elif result.status == "success":
+        summary = "该项检查已完成，详见指标与限制"
+    else:
+        summary = "该项没有可发布的结论"
     refs = sorted(
         {
             ref
@@ -92,6 +102,7 @@ def evidence_from_result(result: SkillResult) -> Evidence:
         summary=summary,
         status=result.status,
         mode=result.mode,
+        outcome=result.outcome,
         dataset_hashes=list(result.dataset_hashes),
         evidence_refs=refs,
         metrics=dict(result.metrics),

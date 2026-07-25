@@ -60,11 +60,16 @@ class _Base:
             for skill_id in ROLE_SKILLS[self.side]
             if skill_id in evidence.results
         ]
-        items = [evidence_from_result(item) for item in chosen]
+        available = [item for item in chosen if item.status == "success"]
+        selected = available or chosen
+        items = [evidence_from_result(item) for item in selected]
         if not items:
             return []
 
-        insufficient = any(item.status != "success" for item in chosen)
+        insufficient = not available
+        has_domain_issue = any(
+            item.outcome in {"fail", "warning"} for item in selected
+        )
         public_evidence = [item.to_dict() for item in items]
         if on_delta is None:
             text = await asyncio.to_thread(
@@ -106,7 +111,7 @@ class _Base:
                 agent=self.__class__.__name__.removesuffix("Agent"),
                 side=self.side,
                 text=text,
-                confidence=0.3 if insufficient else 0.65,
+                confidence=(0.3 if insufficient else 0.45 if has_domain_issue else 0.65),
                 evidence=items,
                 skills_used=[item.skill_id for item in items],
             )
@@ -159,10 +164,7 @@ class AuditAgent(_Base):
                 evidence.results[skill_id]
                 for skill_id in AUDIT_STATUS
                 if skill_id in evidence.results
-                and (
-                    skill_id in claim.skills_used
-                    or claim.side in {"bull", "risk"}
-                )
+                and skill_id in claim.skills_used
             ]
             unavailable = next(
                 (
@@ -173,7 +175,15 @@ class AuditAgent(_Base):
                 None,
             )
             flagged = next(
-                (item for item in relevant if item.findings),
+                (
+                    item
+                    for item in relevant
+                    if item.findings
+                    and (
+                        item.outcome in {"fail", "warning"}
+                        or item.outcome is None
+                    )
+                ),
                 None,
             )
             if unavailable is not None:
@@ -204,7 +214,9 @@ class AuditAgent(_Base):
                     severity=severity,
                     remediation=(
                         "补齐缺失字段并重新运行对应 QuantSkill。"
-                        if source
+                        if status == "missing_evidence"
+                        else "核对引用的异常记录、输入口径与调整因子后重新运行。"
+                        if status != "pass"
                         else ""
                     ),
                     provenance=source.mode if source else evidence.bundle.mode,

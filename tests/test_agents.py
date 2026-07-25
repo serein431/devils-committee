@@ -34,7 +34,7 @@ def test_every_claim_cites_only_integrated_skills(evidence_fixture):
         assert all(item.dataset_hashes for item in claim.evidence)
 
 
-def test_insufficient_result_is_described_as_uncertain(
+def test_available_result_is_not_downgraded_by_an_unavailable_peer_skill(
     evidence_with_missing_factor,
 ):
     claims = asyncio.run(
@@ -42,13 +42,62 @@ def test_insufficient_result_is_described_as_uncertain(
     )
 
     assert claims
+    assert claims[0].confidence > 0.35
+    assert "证据不足" not in claims[0].text
+    assert claims[0].skills_used == [
+        "skill-corporate-action-adjustment-auditor"
+    ]
+
+
+def test_all_unavailable_results_are_described_as_uncertain(
+    evidence_with_missing_factor,
+):
+    corporate = evidence_with_missing_factor.results[
+        "skill-corporate-action-adjustment-auditor"
+    ]
+    corporate.status = "insufficient-evidence"
+    corporate.findings = []
+
+    claims = asyncio.run(
+        BullAgent(MockLLM()).argue(evidence_with_missing_factor)
+    )
+
     assert claims[0].confidence <= 0.35
     assert "证据不足" in claims[0].text
+
+
+def test_audit_prefers_cited_domain_failure_over_uncited_missing_skill(
+    evidence_with_missing_factor,
+):
+    corporate = evidence_with_missing_factor.results[
+        "skill-corporate-action-adjustment-auditor"
+    ]
+    corporate.outcome = "fail"
+
+    claims = asyncio.run(
+        BullAgent(MockLLM()).argue(evidence_with_missing_factor)
+    )
+    verdicts = asyncio.run(
+        AuditAgent(MockLLM()).audit(evidence_with_missing_factor, claims)
+    )
+
+    assert verdicts[0].status == "bad_data"
+    assert verdicts[0].audit_skill == (
+        "skill-corporate-action-adjustment-auditor"
+    )
 
 
 def test_audit_does_not_turn_missing_evidence_into_pass(
     evidence_with_missing_survivorship,
 ):
+    for skill_id in (
+        "skill-portfolio-liquidity-stress-test",
+        "skill-model-hpo-evidence-driven",
+        "skill-corporate-action-adjustment-auditor",
+    ):
+        result = evidence_with_missing_survivorship.results[skill_id]
+        result.status = "insufficient-evidence"
+        result.findings = []
     claims = asyncio.run(
         RiskAgent(MockLLM()).argue(evidence_with_missing_survivorship)
     )
@@ -69,6 +118,14 @@ def test_audit_does_not_turn_skill_error_into_pass(evidence_fixture):
     failed.status = "error"
     failed.findings = []
     failed.warnings = ["skill execution failed"]
+    for skill_id in (
+        "skill-portfolio-liquidity-stress-test",
+        "skill-model-hpo-evidence-driven",
+        "skill-corporate-action-adjustment-auditor",
+    ):
+        result = evidence.results[skill_id]
+        result.status = "insufficient-evidence"
+        result.findings = []
 
     claims = asyncio.run(RiskAgent(MockLLM()).argue(evidence))
     verdicts = asyncio.run(AuditAgent(MockLLM()).audit(evidence, claims))

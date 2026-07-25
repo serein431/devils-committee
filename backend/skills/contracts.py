@@ -75,6 +75,7 @@ class SkillResult:
     status: ResultStatus
     duration_ms: int
     dataset_hashes: list[str]
+    outcome: Literal["pass", "fail", "warning"] | None = None
     assumptions: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     findings: list[SkillFinding] = field(default_factory=list)

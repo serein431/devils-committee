@@ -277,11 +277,37 @@ def test_report_to_result_uses_findings_limitations_and_deduped_hashes():
     )
 
     assert result.status == "success"
+    assert result.outcome == "fail"
     assert result.dataset_hashes == ["daily-hash", "factor-hash"]
     assert result.findings[0].claim == "adjustment mismatch"
     assert result.findings[0].evidence_refs == ["600519.SH", "20240102"]
-    assert result.metrics == {"rows": 2}
+    assert result.metrics == {"rows": 2, "finding_count": 1}
     assert result.warnings == ["dividend field incomplete"]
+
+
+def test_generic_finding_impact_preserves_the_specific_failure_reason():
+    result = report_to_result(
+        "skill-corporate-action-adjustment-auditor",
+        {
+            "status": "fail",
+            "findings": [{
+                "impact": (
+                    "Review the domain result and confirm whether the issue "
+                    "changes the research conclusion."
+                ),
+                "evidence": {
+                    "date": "20260224",
+                    "reasons": ["adjusted_return_mismatch"],
+                },
+            }],
+        },
+        "cache",
+        4,
+        ["daily-hash"],
+    )
+
+    assert result.findings[0].claim == "adjusted_return_mismatch"
+    assert result.metrics["finding_count"] == 1
 
 
 def test_index_rows_do_not_invent_a_missing_announcement_date(monkeypatch):
