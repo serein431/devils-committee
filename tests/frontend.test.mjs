@@ -476,4 +476,105 @@ ok("voice network errors retry once automatically",
 retriedRecognition.onerror?.({ error: "not-allowed" });
 retriedRecognition.end();
 
+// A WebView may return fetch headers but never expose the first streamed chunk.
+// The page must stop waiting and use the non-streaming endpoint instead.
+const stalledFetchCalls = [];
+window.fetch = async (url, options = {}) => {
+  stalledFetchCalls.push({ url: String(url), options });
+  if (String(url).includes("stream=1")) {
+    return {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: () => new Promise(() => {}),
+          cancel: async () => {},
+        }),
+      },
+    };
+  }
+  return {
+    ok: true,
+    json: async () => ({
+      result: {
+        claims: [], verdicts: [], open_disagreements: [], consensus: [],
+        risk_boundaries: ["备用请求已完成"], disclaimer: "仅供研究",
+        meta: {
+          symbol: "600519.SH", n_claims: 0, n_flags: 0,
+          data_status: "insufficient-evidence", audit_engine: [], modes: [],
+          skills_manifest: {
+            all_skills: [], results: [],
+            data: { symbol: "600519.SH", status: "insufficient-evidence", mode: null, dataset_hashes: [] },
+          },
+        },
+      },
+    }),
+  };
+};
+document.getElementById("q").value = "600519.SH WebView 流式兼容测试";
+document.getElementById("go").click();
+await new Promise(resolve => window.setTimeout(resolve, 120));
+ok("stalled WebView stream falls back to the regular endpoint",
+   stalledFetchCalls.length === 2 &&
+   stalledFetchCalls[0].url.includes("stream=1") &&
+   stalledFetchCalls[1].url === "/a2a");
+
+// Lingguang's WebView has been observed reaching the server with an invalid
+// fetch body (HTTP 422). Retry the same SSE request through XMLHttpRequest,
+// which uses the WebView's native HTTP path instead of the injected fetch path.
+const compatXhrCalls = [];
+class MockCompatXMLHttpRequest {
+  constructor() {
+    this.readyState = 0;
+    this.status = 0;
+    this.responseText = "";
+    this.headers = {};
+  }
+  open(method, url) {
+    this.method = method;
+    this.url = url;
+    this.readyState = 1;
+  }
+  setRequestHeader(name, value) { this.headers[name] = value; }
+  send(body) {
+    compatXhrCalls.push({ method: this.method, url: this.url, body, headers: this.headers });
+    this.status = 200;
+    this.readyState = 3;
+    this.responseText = `data: ${JSON.stringify({
+      stage: "result",
+      result: {
+        claims: [], verdicts: [], open_disagreements: [], consensus: [],
+        risk_boundaries: ["XHR 兼容请求已完成"], disclaimer: "仅供研究",
+        meta: {
+          symbol: "600519.SH", n_claims: 0, n_flags: 0,
+          data_status: "insufficient-evidence", audit_engine: [], modes: [],
+          skills_manifest: {
+            all_skills: [], results: [],
+            data: { symbol: "600519.SH", status: "insufficient-evidence", mode: null, dataset_hashes: [] },
+          },
+        },
+      },
+    })}\n\n`;
+    window.setTimeout(() => {
+      this.onprogress?.();
+      this.readyState = 4;
+      this.onload?.();
+    }, 0);
+  }
+  abort() { this.onabort?.(); }
+}
+window.XMLHttpRequest = MockCompatXMLHttpRequest;
+const rejectedFetchCalls = [];
+window.fetch = async (url, options = {}) => {
+  rejectedFetchCalls.push({ url: String(url), options });
+  return { ok: false, status: 422, body: null, json: async () => ({ detail: "invalid request" }) };
+};
+document.getElementById("q").value = "600519.SH 灵光请求体兼容测试";
+document.getElementById("newQuestion").click();
+await new Promise(resolve => window.setTimeout(resolve, 80));
+ok("HTTP 422 from WebView fetch retries the live stream through XHR",
+   rejectedFetchCalls.length === 1 && compatXhrCalls.length === 1 &&
+   compatXhrCalls[0].url.includes("stream=1") &&
+   JSON.parse(compatXhrCalls[0].body).topic.includes("灵光请求体兼容测试") &&
+   document.getElementById("bounds").textContent.includes("XHR 兼容请求已完成"));
+
 console.log(`\n✔ frontend DOM (quant-terminal): all ${passed} checks green`);

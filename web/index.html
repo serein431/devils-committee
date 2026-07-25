@@ -444,6 +444,7 @@ const IS_JSDOM=/jsdom/i.test(navigator.userAgent);
 const STAGE_TURN_MS=IS_JSDOM?30:2200;
 const STAGE_FRAME_MS=IS_JSDOM?2:260;
 const STREAM_CHAR_MS=IS_JSDOM?1:52;
+const FIRST_STREAM_EVENT_TIMEOUT_MS=IS_JSDOM?25:8000;
 const avatarPreloads=[];
 AVATAR_SIDES.forEach(side=>AVATAR_STATES.forEach(state=>{
   const image=new Image();image.src=avatarSrc(side,state);avatarPreloads.push(image);
@@ -1077,6 +1078,73 @@ function renderResult(r){
   setStage(claimCount===0?"研究结束 · 当前证据没有形成可发布论据。":"开庭结束 · 它没告诉你买不买，它让你看懂了买不买。",false);
 }
 
+async function readSseResponse(res){
+  const rd=res.body.getReader(),dec=new TextDecoder();let buf="",receivedEvent=false;
+  try{
+    while(true){
+      let timer=0;
+      const next=receivedEvent?rd.read():Promise.race([
+        rd.read(),
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("first stream event timeout")),FIRST_STREAM_EVENT_TIMEOUT_MS);}),
+      ]);
+      let chunk;
+      try{chunk=await next;}finally{if(timer)clearTimeout(timer);}
+      const{value,done}=chunk;if(done)break;buf+=dec.decode(value,{stream:true});
+      let i;while((i=buf.indexOf("\n\n"))>=0){const ln=buf.slice(0,i).split("\n").find(l=>l.startsWith("data:"));buf=buf.slice(i+2);
+        if(ln){receivedEvent=true;await handleEvent(JSON.parse(ln.slice(5).trim()));}}
+    }
+  }catch(error){
+    try{await rd.cancel();}catch(_){}
+    throw error;
+  }
+}
+
+function readSseWithXhr(url,payload){
+  return new Promise((resolve,reject)=>{
+    if(typeof XMLHttpRequest!=="function"){reject(new Error("xhr unavailable"));return;}
+    const xhr=new XMLHttpRequest();let seen=0,buf="",receivedEvent=false,settled=false;
+    let processing=Promise.resolve(),firstEventTimer=0;
+    const finish=(error)=>{
+      if(settled)return;settled=true;if(firstEventTimer)clearTimeout(firstEventTimer);
+      if(error)reject(error);else resolve();
+    };
+    const drain=()=>{
+      const text=String(xhr.responseText||"");if(text.length<=seen)return;
+      buf+=text.slice(seen);seen=text.length;
+      let i;while((i=buf.indexOf("\n\n"))>=0){
+        const ln=buf.slice(0,i).split("\n").find(l=>l.startsWith("data:"));buf=buf.slice(i+2);
+        if(!ln)continue;
+        const event=JSON.parse(ln.slice(5).trim());receivedEvent=true;
+        if(firstEventTimer){clearTimeout(firstEventTimer);firstEventTimer=0;}
+        processing=processing.then(()=>handleEvent(event));processing.catch(finish);
+      }
+    };
+    xhr.open("POST",url,true);
+    xhr.setRequestHeader("Content-Type","application/json");
+    xhr.setRequestHeader("Accept","text/event-stream");
+    xhr.onprogress=()=>{try{drain();}catch(error){finish(error);try{xhr.abort();}catch(_){}}};
+    xhr.onload=()=>{
+      try{drain();}catch(error){finish(error);return;}
+      if(xhr.status<200||xhr.status>=300){finish(new Error(`xhr stream failed: ${xhr.status}`));return;}
+      if(!receivedEvent){finish(new Error("xhr stream returned no events"));return;}
+      processing.then(()=>finish(),finish);
+    };
+    xhr.onerror=()=>finish(new Error("xhr stream network error"));
+    xhr.onabort=()=>finish(new Error("xhr stream aborted"));
+    firstEventTimer=setTimeout(()=>{
+      finish(new Error("xhr first stream event timeout"));try{xhr.abort();}catch(_){}
+    },FIRST_STREAM_EVENT_TIMEOUT_MS);
+    xhr.send(JSON.stringify(payload));
+  });
+}
+
+function showCompatibilityProgress(){
+  returnStagePlayers("兼容模式 · 研究中");
+  const message="当前浏览环境没有及时显示流式内容，已切换兼容模式。真实分析仍在进行，完成后会自动显示。";
+  const quote=$("#stageQuote");quote.dataset.rawText=message;quote.innerHTML=message;
+  setStage(message,true);
+}
+
 async function run(){
   const q=$("#q").value.trim();if(!q||researchRunning)return;
   const nextSymbol=querySymbol(q),currentDigits=querySymbol(conversationSymbol||conversationRoot);
@@ -1097,15 +1165,20 @@ async function run(){
   $("#debateSec").classList.remove("hidden");
   document.querySelectorAll('.pstage').forEach(p=>p.classList.remove('on','done'));
   setStage("开庭：4 个研究 Agent 并行取证，审计与主持随后加入",true);
+  let streamController=null;
   try{
+    streamController=typeof AbortController==="function"?new AbortController():null;
     const res=await fetch("/a2a?stream=1",{method:"POST",headers:{"Content-Type":"application/json","Accept":"text/event-stream"},
-      body:JSON.stringify({skill:"debate_case",topic:requestTopic})});
+      body:JSON.stringify({skill:"debate_case",topic:requestTopic}),signal:streamController?.signal});
     if(!res.ok||!res.body)throw new Error("stream unavailable");
-    const rd=res.body.getReader(),dec=new TextDecoder();let buf="";
-    while(true){const{value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
-      let i;while((i=buf.indexOf("\n\n"))>=0){const ln=buf.slice(0,i).split("\n").find(l=>l.startsWith("data:"));buf=buf.slice(i+2);
-        if(ln)await handleEvent(JSON.parse(ln.slice(5).trim()));}}
+    await readSseResponse(res);
   }catch(e){
+    try{streamController?.abort();}catch(_){}
+    showCompatibilityProgress();
+    try{
+      await readSseWithXhr("/a2a?stream=1",{skill:"debate_case",topic:requestTopic});
+      return;
+    }catch(_){}
     try{
       const r=await fetch("/a2a",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:requestTopic})});
       if(!r.ok)throw new Error("request failed");
