@@ -78,7 +78,10 @@ class SkillRunner:
             request,
             bundle,
         )
-        store = PrecomputedStore(CONFIG.precomputed_dir, CONFIG.build_commit)
+        store = PrecomputedStore(
+            CONFIG.precomputed_dir,
+            CONFIG.precomputed_commit or CONFIG.build_commit,
+        )
         precomputed = [
             store.load(FACTOR_SKILL, request.symbol),
             store.load(HPO_SKILL, request.symbol),

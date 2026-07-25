@@ -78,6 +78,9 @@ class Config:
     cache_dir: str = field(default_factory=lambda: _env("CACHE_DIR", "./var/cache"))
     data_version: str = field(default_factory=lambda: _env("DATA_VERSION", "panda-2026-07"))
     build_commit: str = field(default_factory=lambda: _env("BUILD_COMMIT"))
+    precomputed_commit: str = field(
+        default_factory=lambda: _env("PRECOMPUTED_COMMIT")
+    )
     skill_timeout_sec: int = field(default_factory=lambda: _env_int("SKILL_TIMEOUT_SEC", 120))
     request_budget_sec: int = field(default_factory=lambda: _env_int("REQUEST_BUDGET_SEC", 600))
 

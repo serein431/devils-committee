@@ -482,7 +482,8 @@ def test_skill_runner_combines_online_and_precomputed_results(tmp_path, monkeypa
         SimpleNamespace(
             skill_timeout_sec=12,
             precomputed_dir=str(tmp_path),
-            build_commit="abc123",
+            build_commit="deployed-commit",
+            precomputed_commit="abc123",
         ),
     )
     monkeypatch.setattr(

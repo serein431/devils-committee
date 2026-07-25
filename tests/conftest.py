@@ -20,6 +20,7 @@ if os.environ.get("RUN_LIVE_INTEGRATION") != "1":
         "DEFAULT_PASSWORD",
         "A2A_BEARER_TOKEN",
         "BUILD_COMMIT",
+        "PRECOMPUTED_COMMIT",
     ):
         # Empty values prevent backend.config's setdefault-based .env loader
         # from importing live credentials into the ordinary test process.
