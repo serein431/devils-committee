@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..config import CONFIG
 from ..research_request import ResearchRequest
 from .contracts import MarketDataBundle, SkillFinding, SkillResult
 from .data import DailyBars, get_stock_daily
 from .online import OnlineSkillRunner
-from .panda import build_market_data_bundle
+from .panda import build_market_data_bundle, resolve_request_trading_dates
 from .precomputed import FACTOR_SKILL, HPO_SKILL, PrecomputedStore
+from .research import build_research_profiles
 
 
 MOCK_SKILL_IDS = [
@@ -29,6 +30,13 @@ class ResearchEvidence:
     request: ResearchRequest
     bundle: MarketDataBundle
     results: dict[str, SkillResult]
+    analysis: dict[str, SkillResult] = field(default_factory=dict)
+
+    @property
+    def all_results(self) -> dict[str, SkillResult]:
+        """Return external Skills plus project-owned stock research profiles."""
+
+        return {**self.results, **self.analysis}
 
 
 def build_mock_results(bundle: MarketDataBundle) -> dict[str, SkillResult]:
@@ -64,6 +72,7 @@ class SkillRunner:
         self._bars_cache: dict[str, DailyBars] = {}
 
     async def prepare(self, request: ResearchRequest) -> ResearchEvidence:
+        request = await asyncio.to_thread(resolve_request_trading_dates, request)
         bundle = await asyncio.to_thread(build_market_data_bundle, request)
         if bundle.status != "success":
             return ResearchEvidence(request, bundle, {})
@@ -72,6 +81,7 @@ class SkillRunner:
                 request,
                 bundle,
                 build_mock_results(bundle),
+                build_research_profiles(request, bundle),
             )
 
         online = await OnlineSkillRunner(CONFIG.skill_timeout_sec).run_all(
@@ -93,6 +103,7 @@ class SkillRunner:
             request,
             bundle,
             all_results,
+            build_research_profiles(request, bundle),
         )
 
     def bars(self, symbol: str) -> DailyBars:

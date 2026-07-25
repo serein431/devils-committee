@@ -10,7 +10,7 @@
 - 真实环境需要 Python 3.12、`requirements-real.txt`、Volcengine Ark Endpoint ID、PandaData 账号和 QuantSkills 仓库。
 - LLM 通过 Volcengine Ark 调用，页面和状态接口显示名称为 **DeepSeek V4 Pro**；`LLM_MODEL` 必须填写活动提供的 Endpoint ID，不是显示名称。
 - 当前真实研究只支持 A 股。港股或其他境外市场会返回 `insufficient-evidence`，不会用 mock 补成结果。
-- 每个真实请求运行四个在线 QuantSkills 和一个项目内的指数权重变化研究，并读取 HPO 预计算结果；在线因子研究失败时可读取经过哈希核验的预计算报告。
+- 每个真实请求先生成公司、财务、估值、市场、行业、资金、股东、事件和宏观九类研究画像，再运行四个在线 QuantSkills、一个项目内指数权重变化研究，并读取 HPO 预计算结果；在线因子研究失败时可读取经过哈希核验的预计算报告。
 - 公网服务已部署到 `https://devils.corvusapi.org`，提供 A2A v1 JSON-RPC、Task 查询和 SSE 状态事件。
 
 ## 默认开发：离线 mock
@@ -52,7 +52,27 @@ git submodule update --init --recursive
 
 真实研究使用 PandaData 历史数据。缓存键由请求方法、参数、SDK 版本和数据版本计算；Parquet 文件另存 SHA-256。读取缓存时会重新核验哈希。
 
-## 六项研究能力
+数据路由不是每次无脑调用所有接口。基础请求会并行读取有效交易日、股票身份、日线与复权、季度财报、指数、资金、股东和公司事件；行业成分、行业宏观、龙虎榜明细、管理层问答和盘中分钟数据根据前置结果或用户问题触发。并发读取失败会在并行队列结束后串行补取，空结果也会缓存，避免把短暂接口失败写成“整只股票资料不足”。
+
+季度财报 `get_fina_reports` 是基本面主来源，财务快报 `get_fina_performance` 仅作补充。金融企业使用行业专用解释口径，不用经营现金流/利润倍数直接判断盈利质量。
+
+## 九类股票研究画像
+
+| 画像 ID | 主要内容 |
+|---|---|
+| `project-company-context` | 公司名称、行业、企业性质和特殊交易状态 |
+| `project-company-fundamentals` | 营收、利润、现金流、ROE及同比变化 |
+| `project-valuation-snapshot` | PE、PB与同期沪深300估值背景 |
+| `project-market-behavior` | 20/60/120日收益、相对强弱、波动和回撤 |
+| `project-industry-comparison` | 同行业收益、市值和换手率分位 |
+| `project-capital-flow` | 融资融券、沪深股通、大宗交易和龙虎榜 |
+| `project-ownership-and-capital-actions` | 股东户数、主要股东、质押、增减持、回购和解禁 |
+| `project-corporate-events` | 业绩预告、审计意见、分红、诉讼、担保和重大事件 |
+| `project-macro-environment` | 利率、货币以及按行业选择的宏观指标 |
+
+每类画像发布 `direction`、`confidence`、关键指标、数据哈希、截止日期、计算假设和警告。画像用于回答股票本身强在哪里、弱在哪里；数据审计是辅助层，不再替代个股结论。
+
+## 六项审计与研究能力
 
 提交材料使用下面六个能力 ID。五项来自 QuantSkills，一项由本项目实现。
 
@@ -80,16 +100,17 @@ git submodule update --init --recursive
 ```text
 A2A 请求
   └─ 研究请求解析：只接受当前支持的 A 股代码
-      └─ PandaData：live 或经哈希核验的 cache
-          ├─ 四个在线 QuantSkills（每个最多 120 秒）
-          ├─ 项目内指数权重变化研究
-          └─ HPO precomputed 报告（因子研究可在失败时读取预计算报告）
-              └─ Bull / Bear / Macro / Risk 首轮并行陈述（单个 Agent 最多 120 秒）
-                  └─ Audit 独立初审
-                      └─ 四方针对具体论据并行定向回应
-                          └─ Audit 复审回应
-                              └─ Chair 根据陈述、回应与审计结果汇总
-                                  └─ compliance 检查后返回 JSON 或 SSE
+      └─ 交易日解析与 PandaData 动态数据路由：live 或经哈希核验的 cache
+          └─ 九类股票研究画像
+              ├─ 四个在线 QuantSkills（每个最多 120 秒）
+              ├─ 项目内指数权重变化研究
+              └─ HPO precomputed 报告（因子研究可在失败时读取预计算报告）
+                  └─ Bull / Bear / Macro / Risk 首轮并行陈述（单个 Agent 最多 120 秒）
+                      └─ Audit 独立初审：同时检查数据审计和错误归因
+                          └─ 四方针对具体论据并行定向回应
+                              └─ Audit 复审回应
+                                  └─ Chair 只用通过审计的论据收敛强项、弱项和分歧
+                                      └─ compliance 检查后返回 JSON 或 SSE
 ```
 
 交叉质询只有一轮，不会重复获取数据或运行 QuantSkills。`Claim` 在原有响应字段之外新增兼容字段：`kind` 区分首轮陈述与回应，`round` 标记轮次，`responds_to` 指向被回应的论据 ID；现有客户端可继续忽略这些新增字段。
@@ -98,9 +119,9 @@ A2A 请求
 
 ## 三个固定研究示例
 
-- `600519.SH`：复权、分红、因子和流动性风险。
-- `300750.SZ`：成长因子、波动、流动性和指数权重变化。
-- `601318.SH`：分红、股票池和风险证据。
+- `601628.SH`：验证保险行业财务口径、盈利压力、相对强弱、股东和宏观画像。
+- `300750.SZ`：验证成长制造的盈利、估值、动力电池行业指标和资金变化。
+- `600519.SH`：验证消费龙头的现金流、估值、股东行为和白酒行业价格指标。
 
 示例文件位于 `tests/examples/`。审计结论取决于实际数据、缓存和预计算报告，文档不预写“必定通过”或“必定标记”。
 

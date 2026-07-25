@@ -429,7 +429,7 @@ class DebateOrchestrator:
 
             yield {"stage": "synthesize", "msg": "主持汇总共识与分歧…"}
             synthesis = await asyncio.wait_for(
-                self.chair.synthesize(request.symbol, claims, verdicts),
+                self.chair.synthesize(request.symbol, claims, verdicts, evidence),
                 timeout=_require_remaining(deadline),
             )
         except asyncio.TimeoutError:
@@ -577,6 +577,20 @@ class DebateOrchestrator:
                     "warnings": list(result.warnings),
                 }
             )
+        research_profiles = []
+        for profile_id, result in sorted(evidence.analysis.items()):
+            research_profiles.append(
+                {
+                    "profile_id": profile_id,
+                    "status": result.status,
+                    "mode": result.mode,
+                    "duration_ms": result.duration_ms,
+                    "dataset_hashes": list(result.dataset_hashes),
+                    "used_by": sorted(used_by.get(profile_id, set())),
+                    "assumptions": list(result.assumptions),
+                    "warnings": list(result.warnings),
+                }
+            )
         return {
             "data": {
                 "symbol": evidence.request.symbol,
@@ -586,6 +600,7 @@ class DebateOrchestrator:
             },
             "results": results,
             "all_skills": sorted(evidence.results),
+            "research_profiles": research_profiles,
         }
 
     async def audit_claims(self, topic: str | ResearchRequest) -> dict:
@@ -860,15 +875,15 @@ def _require_remaining(deadline: float) -> float:
 
 def _evidence_modes(evidence: ResearchEvidence) -> list[str]:
     modes = {evidence.bundle.mode}
-    modes.update(result.mode for result in evidence.results.values())
+    modes.update(result.mode for result in evidence.all_results.values())
     allowed = {"live", "cache", "precomputed", "mock"}
     return sorted(mode for mode in modes if mode in allowed)
 
 
 def _has_publishable_evidence(evidence: ResearchEvidence) -> bool:
-    """Return whether any integrated Skill completed successfully."""
+    """Return whether any Skill or company research profile is publishable."""
 
-    return any(result.status == "success" for result in evidence.results.values())
+    return any(result.status == "success" for result in evidence.all_results.values())
 
 
 def _normalize_missing_evidence_verdicts(

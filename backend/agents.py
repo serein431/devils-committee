@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 from collections.abc import Awaitable, Callable, Iterator
 
 from .models import (
@@ -13,10 +14,64 @@ from .models import (
     evidence_from_result,
 )
 from .plain import plain_audit
+from .skills.research import (
+    COMPANY_PROFILE_ID,
+    EVENT_PROFILE_ID,
+    FLOW_PROFILE_ID,
+    FUNDAMENTAL_PROFILE_ID,
+    INDUSTRY_PROFILE_ID,
+    MACRO_PROFILE_ID,
+    MARKET_PROFILE_ID,
+    OWNERSHIP_PROFILE_ID,
+    VALUATION_PROFILE_ID,
+)
 from .skills.runner import ResearchEvidence
 
 
 ROLE_SKILLS = {
+    "bull": [
+        COMPANY_PROFILE_ID,
+        FUNDAMENTAL_PROFILE_ID,
+        VALUATION_PROFILE_ID,
+        MARKET_PROFILE_ID,
+        INDUSTRY_PROFILE_ID,
+        FLOW_PROFILE_ID,
+        OWNERSHIP_PROFILE_ID,
+        EVENT_PROFILE_ID,
+        "skill-factor-ranking-sage",
+    ],
+    "bear": [
+        VALUATION_PROFILE_ID,
+        FUNDAMENTAL_PROFILE_ID,
+        MARKET_PROFILE_ID,
+        INDUSTRY_PROFILE_ID,
+        FLOW_PROFILE_ID,
+        OWNERSHIP_PROFILE_ID,
+        EVENT_PROFILE_ID,
+        "skill-portfolio-liquidity-stress-test",
+    ],
+    "macro": [
+        COMPANY_PROFILE_ID,
+        INDUSTRY_PROFILE_ID,
+        MACRO_PROFILE_ID,
+        MARKET_PROFILE_ID,
+        "project-index-weight-change-study",
+    ],
+    "risk": [
+        MARKET_PROFILE_ID,
+        FUNDAMENTAL_PROFILE_ID,
+        FLOW_PROFILE_ID,
+        OWNERSHIP_PROFILE_ID,
+        EVENT_PROFILE_ID,
+        "skill-portfolio-liquidity-stress-test",
+        "skill-survivorship-universe-auditor",
+        "skill-corporate-action-adjustment-auditor",
+    ],
+}
+
+# Compatibility for callers that construct ResearchEvidence directly without
+# the project-owned stock profiles. Runtime SkillRunner always supplies them.
+LEGACY_ROLE_SKILLS = {
     "bull": [
         "skill-factor-ranking-sage",
         "skill-corporate-action-adjustment-auditor",
@@ -44,21 +99,223 @@ AUDIT_STATUS = {
 }
 
 
+def _claim_grounding_issue(claim: Claim) -> tuple[str, str] | None:
+    """Catch recurring finance inferences that the supplied profiles cannot prove."""
+
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"[。！？\n]+", claim.text)
+        if sentence.strip()
+    ]
+    safe_caveats = (
+        "不能推断",
+        "不能确认",
+        "不能证明",
+        "不能识别",
+        "不能直接推出",
+        "不能直接解读",
+        "不能等同于",
+        "无法判断",
+        "不足以判断",
+        "没有证据",
+        "不得",
+        "不等于",
+        "未证明",
+        "不支持",
+    )
+    for sentence in sentences:
+        if any(token in sentence for token in safe_caveats):
+            continue
+        if (
+            any(
+                token in sentence
+                for token in ("投资损益", "投资收益", "准备金", "赔付", "产品结构")
+            )
+            and any(token in sentence for token in ("归因", "导致", "指向", "由于", "源于", "可能"))
+        ):
+            return (
+                "论据自行补写了财务数据未提供的利润变化原因；现有证据只能确认收入和利润变化，不能确认投资损益、准备金、赔付或产品结构的贡献。",
+                "删除具体原因推断，只保留已披露的财务变化，或补充可核验的利润归因数据后重述。",
+            )
+        if (
+            "股东户数" in sentence
+            and any(
+                token in sentence
+                for token in ("筹码从", "向散户", "机构或大户", "长线资金", "抛售压力")
+            )
+        ):
+            return (
+                "股东户数变化只能说明持股集中度变化，不能识别筹码由哪类投资者转移，也不能直接推出未来抛售压力。",
+                "将结论收窄为持股趋于集中或分散；若要判断投资者类型和卖压，需要独立持仓与交易数据。",
+            )
+        if any(token in sentence for token in ("市场风格确实", "市场风格在", "风格确实在往")):
+            return (
+                "个股相对指数和同行排名不能单独证明市场风格正在转向该股票或其行业。",
+                "只描述个股相对强弱；补充行业整体收益、资金和宏观传导证据后再判断市场风格。",
+            )
+        if (
+            "分红" in sentence
+            and any(token in sentence for token in ("安全垫", "长期持有", "持有提供"))
+        ):
+            return (
+                "分红记录与审计意见属于公司治理和历史分配事实，不能单独构成长线持有的安全垫。",
+                "只陈述分红计划和审计意见，不外推为持有价值或下行保护。",
+            )
+        if (
+            any(token in sentence for token in ("估值", "PE", "PB"))
+            and any(
+                token in sentence
+                for token in (
+                    "极端高估",
+                    "极端低估",
+                    "估值压力",
+                    "安全垫",
+                    "安全边际",
+                    "不构成负面拖累",
+                )
+            )
+            and "是否" not in sentence
+        ):
+            return (
+                "当前估值画像缺少同行估值和历史分位，不能据此确认高估、低估或安全垫。沪深300估值只提供市场背景，不是行业可比估值。",
+                "仅报告PE/PB快照；补充同行和历史估值分位后再判断估值状态。",
+            )
+        if any(token in sentence for token in ("脆弱的持仓信心", "容易伴随快速反转")):
+            return (
+                "波动率和回撤可以量化价格风险，但不能直接证明持仓信心脆弱或未来容易快速反转。",
+                "保留波动和回撤事实，把投资者信心或反转判断改为待验证情景。",
+            )
+        if any(token in sentence for token in ("只是短期反弹", "一次反弹", "视为反弹")):
+            return (
+                "历史收益、波动和回撤不能确认当前上涨只是反弹，也不能预测趋势持续性。",
+                "只描述历史相对强弱与风险路径；若要判断反弹或趋势，需要额外的可验证规则。",
+            )
+        if "经营现金流" in sentence and any(
+            token in sentence for token in ("主业造血", "现金创造能力", "盈利质量")
+        ):
+            return (
+                "经营现金流变化不能直接写成主业造血能力或盈利质量结论，金融企业尤其需要使用行业专用现金流口径。",
+                "只报告经营现金流同比，并结合行业专用报表字段后再解释经营质量。",
+            )
+        if any(
+            token in sentence
+            for token in ("数据可靠性没有发现问题", "数据可靠性没有问题", "数据完全可靠")
+        ):
+            return (
+                "审计通过只表示已检查范围内没有发现问题，不能证明全部数据可靠或没有其他缺陷。",
+                "把结论收窄为对应审计器定义范围内未发现问题，并保留未覆盖字段和事件的限制。",
+            )
+    return None
+
+
+def _deterministic_overall_assessment(
+    symbol: str,
+    evidence: ResearchEvidence,
+) -> str:
+    profiles = evidence.analysis
+    fundamental = profiles.get(FUNDAMENTAL_PROFILE_ID)
+    market = profiles.get(MARKET_PROFILE_ID)
+    industry = profiles.get(INDUSTRY_PROFILE_ID)
+    flow = profiles.get(FLOW_PROFILE_ID)
+    valuation = profiles.get(VALUATION_PROFILE_ID)
+    positives: list[str] = []
+    negatives: list[str] = []
+
+    if fundamental and fundamental.status == "success":
+        revenue = fundamental.metrics.get("revenue_yoy_pct")
+        profit = fundamental.metrics.get("net_profit_yoy_pct")
+        if isinstance(revenue, (int, float)):
+            target = positives if revenue > 0 else negatives if revenue < 0 else None
+            if target is not None:
+                target.append(f"营收同比 {revenue:.2f}%")
+        if isinstance(profit, (int, float)):
+            target = positives if profit > 0 else negatives if profit < 0 else None
+            if target is not None:
+                target.append(f"归母净利润同比 {profit:.2f}%")
+
+    if market and market.status == "success":
+        recent_return = market.metrics.get("return_60d_pct")
+        relative = market.metrics.get("relative_to_csi300_60d_pct")
+        volatility = market.metrics.get("volatility_60d_ann_pct")
+        drawdown = market.metrics.get("max_drawdown_120d_pct")
+        if isinstance(recent_return, (int, float)):
+            target = positives if recent_return > 0 else negatives if recent_return < 0 else None
+            if target is not None:
+                target.append(f"近60日收益 {recent_return:.2f}%")
+        if isinstance(relative, (int, float)):
+            target = positives if relative > 0 else negatives if relative < 0 else None
+            if target is not None:
+                target.append(f"相对沪深300近60日 {relative:.2f} 个百分点")
+        if isinstance(volatility, (int, float)) and volatility >= 30:
+            negatives.append(f"60日年化波动 {volatility:.2f}%")
+        if isinstance(drawdown, (int, float)) and drawdown <= -20:
+            negatives.append(f"近120日最大回撤 {drawdown:.2f}%")
+
+    if industry and industry.status == "success":
+        percentile = industry.metrics.get("return_60d_percentile")
+        if isinstance(percentile, (int, float)):
+            if percentile >= 70:
+                positives.append(f"同行近60日收益约 {percentile:.0f}% 分位")
+            elif percentile <= 30:
+                negatives.append(f"同行近60日收益约 {percentile:.0f}% 分位")
+
+    if flow and flow.status == "success" and flow.metrics.get("direction") == "negative":
+        negatives.append("资金面画像偏弱")
+
+    if positives and negatives:
+        label = "中性偏谨慎" if len(negatives) >= len(positives) + 2 else "分歧较大"
+    elif positives:
+        label = "中性偏积极"
+    elif negatives:
+        label = "偏谨慎"
+    else:
+        return f"综合判断：证据不足。{symbol} 当前缺少足够的可发布公司研究画像。"
+
+    parts = [f"综合判断：{label}。"]
+    if positives:
+        parts.append("强项是" + "、".join(positives[:3]) + "；")
+    if negatives:
+        parts.append("弱项是" + "、".join(negatives[:4]) + "。")
+    if valuation and valuation.status == "success":
+        pe = valuation.metrics.get("pe_estimate")
+        pb = valuation.metrics.get("pb_estimate")
+        values = []
+        if isinstance(pe, (int, float)):
+            values.append(f"PE约 {pe:.2f} 倍")
+        if isinstance(pb, (int, float)):
+            values.append(f"PB约 {pb:.2f} 倍")
+        if values:
+            parts.append(
+                "估值仅作为快照（"
+                + "、".join(values)
+                + "），缺少同行与历史分位时不判断高低。"
+            )
+    return "".join(parts)
+
+
 class _Base:
     side = ""
 
     def __init__(self, llm) -> None:
         self.llm = llm
 
+    def _result_ids(self, evidence: ResearchEvidence) -> list[str]:
+        return (
+            ROLE_SKILLS[self.side]
+            if evidence.analysis
+            else LEGACY_ROLE_SKILLS[self.side]
+        )
+
     async def argue(
         self,
         evidence: ResearchEvidence,
         on_delta: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> list[Claim]:
+        all_results = evidence.all_results
         chosen = [
-            evidence.results[skill_id]
-            for skill_id in ROLE_SKILLS[self.side]
-            if skill_id in evidence.results
+            all_results[skill_id]
+            for skill_id in self._result_ids(evidence)
+            if skill_id in all_results
         ]
         available = [item for item in chosen if item.status == "success"]
         selected = available or chosen
@@ -148,10 +405,11 @@ class _Base:
         if not targets:
             return []
 
+        all_results = evidence.all_results
         chosen = [
-            evidence.results[skill_id]
-            for skill_id in ROLE_SKILLS[self.side]
-            if skill_id in evidence.results
+            all_results[skill_id]
+            for skill_id in self._result_ids(evidence)
+            if skill_id in all_results
         ]
         available = [item for item in chosen if item.status == "success"]
         selected = available or chosen
@@ -241,8 +499,12 @@ class AuditAgent(_Base):
         evidence: ResearchEvidence,
         claims: list[Claim],
     ) -> list[AuditVerdict]:
+        all_results = evidence.all_results
         verdicts = []
         for claim in claims:
+            grounding_issue = _claim_grounding_issue(claim)
+            reason_override = ""
+            remediation_override = ""
             unavailable_items = [
                 item
                 for item in claim.evidence
@@ -257,16 +519,16 @@ class AuditAgent(_Base):
                 default=None,
             )
             relevant = [
-                evidence.results[skill_id]
+                all_results[skill_id]
                 for skill_id in AUDIT_STATUS
-                if skill_id in evidence.results
+                if skill_id in all_results
                 and skill_id in claim.skills_used
             ]
             successful_claim_results = [
-                evidence.results[skill_id]
+                all_results[skill_id]
                 for skill_id in claim.skills_used
-                if skill_id in evidence.results
-                and evidence.results[skill_id].status == "success"
+                if skill_id in all_results
+                and all_results[skill_id].status == "success"
             ]
             unavailable = next(
                 (
@@ -296,7 +558,7 @@ class AuditAgent(_Base):
             if unavailable_claim is not None:
                 status, source, severity = (
                     "missing_evidence",
-                    evidence.results.get(unavailable_claim.skill_id),
+                    all_results.get(unavailable_claim.skill_id),
                     "medium",
                 )
             elif unavailable is not None:
@@ -308,6 +570,9 @@ class AuditAgent(_Base):
             elif flagged is not None:
                 status = AUDIT_STATUS[flagged.skill_id]
                 source, severity = flagged, "medium"
+            elif grounding_issue is not None:
+                status, source, severity = "thin_data", None, "medium"
+                reason_override, remediation_override = grounding_issue
             elif indeterminate is not None:
                 status, source, severity = "thin_data", indeterminate, "low"
             elif relevant:
@@ -322,10 +587,12 @@ class AuditAgent(_Base):
                 status, source, severity = "missing_evidence", None, "medium"
 
             detail = source.to_dict() if source else {}
-            if status == "pass":
+            if reason_override:
+                reason = reason_override
+            elif status == "pass":
                 reason = (
-                    f"{source.skill_id} 已成功执行，当前论据没有引用不可用证据；"
-                    "这里的通过不代表预测性、因果性、稳定性或可交易性已经验证。"
+                    f"{source.skill_id} 已成功执行并生成可追踪研究证据，当前论据没有引用不可用数据；"
+                    "这里的通过只表示证据引用完整，不代表预测性、未来表现、因果性或可交易性已经验证。"
                     if source
                     else "现有独立审计结果没有指出可发布的问题。"
                 )
@@ -346,24 +613,32 @@ class AuditAgent(_Base):
                     symbol=evidence.request.symbol,
                     detail=detail,
                 )
+            if remediation_override:
+                remediation = remediation_override
+            elif status == "missing_evidence" and source is None:
+                remediation = "接入与该论据对应的独立审计器后重新运行。"
+            elif status == "thin_data" and source is not None and source.outcome is None:
+                remediation = "补充明确的领域审计结论或独立确认结果。"
+            elif status == "missing_evidence":
+                remediation = "补齐缺失字段并重新运行对应 QuantSkill。"
+            elif status != "pass":
+                remediation = "核对引用的异常记录、输入口径与调整因子后重新运行。"
+            else:
+                remediation = ""
             verdicts.append(
                 AuditVerdict(
                     claim_id=claim.id,
                     status=status,
                     reason=reason,
-                    audit_skill=source.skill_id if source else "",
-                    severity=severity,
-                    remediation=(
-                        "接入与该论据对应的独立审计器后重新运行。"
-                        if status == "missing_evidence" and source is None
-                        else "补充明确的领域审计结论或独立确认结果。"
-                        if status == "thin_data" and source is not None and source.outcome is None
-                        else "补齐缺失字段并重新运行对应 QuantSkill。"
-                        if status == "missing_evidence"
-                        else "核对引用的异常记录、输入口径与调整因子后重新运行。"
-                        if status != "pass"
+                    audit_skill=(
+                        "project-grounding-guard"
+                        if grounding_issue is not None and reason_override
+                        else source.skill_id
+                        if source
                         else ""
                     ),
+                    severity=severity,
+                    remediation=remediation,
                     provenance=source.mode if source else evidence.bundle.mode,
                     plain=plain_audit(status),
                 )
@@ -381,6 +656,7 @@ class ChairAgent(_Base):
         symbol: str,
         claims: list[Claim],
         verdicts: list[AuditVerdict],
+        evidence: ResearchEvidence | None = None,
     ) -> dict:
         positions = [
             claim
@@ -389,6 +665,12 @@ class ChairAgent(_Base):
         ]
         by_side = {claim.side: claim for claim in positions}
         verdict_by_claim = {verdict.claim_id: verdict for verdict in verdicts}
+        accepted_positions = [
+            claim
+            for claim in positions
+            if verdict_by_claim.get(claim.id) is not None
+            and verdict_by_claim[claim.id].passed
+        ]
         accepted_rebuttals = [
             claim
             for claim in claims
@@ -414,6 +696,60 @@ class ChairAgent(_Base):
         bear = by_side.get("bear")
         risk = by_side.get("risk")
         flags = [verdict for verdict in verdicts if not verdict.passed]
+
+        assessment_payload = {
+            "positions": [
+                {
+                    "claim_id": claim.id,
+                    "side": claim.side,
+                    "text": claim.text,
+                    "confidence": claim.confidence,
+                }
+                for claim in accepted_positions
+            ],
+            "accepted_rebuttals": [
+                {
+                    "claim_id": claim.id,
+                    "side": claim.side,
+                    "responds_to": claim.responds_to,
+                    "text": claim.text,
+                }
+                for claim in accepted_rebuttals
+            ],
+            "audit_flags": [
+                {
+                    "claim_id": verdict.claim_id,
+                    "status": verdict.status,
+                    "reason": verdict.reason,
+                }
+                for verdict in flags
+            ],
+            "research_profiles": {
+                profile_id: {
+                    "status": result.status,
+                    "metrics": result.metrics,
+                    "assumptions": result.assumptions,
+                }
+                for profile_id, result in (evidence.analysis.items() if evidence else [])
+            },
+        }
+        overall = await asyncio.to_thread(
+            self.llm.chair_line,
+            symbol=symbol,
+            kind="overall_assessment",
+            payload=assessment_payload,
+        )
+        overall = str(overall or "").strip()
+        if not overall.startswith("综合判断："):
+            overall = f"综合判断：{overall or '现有证据不足以形成稳定评价。'}"
+        overall_claim = Claim(
+            id="chair-overall",
+            agent="Chair",
+            side="risk",
+            text=overall,
+        )
+        if evidence is not None and _claim_grounding_issue(overall_claim) is not None:
+            overall = _deterministic_overall_assessment(symbol, evidence)
 
         disagreements = []
         if bull or bear:
@@ -442,8 +778,8 @@ class ChairAgent(_Base):
             )
 
         consensus = [
-            f"本轮只解释 {symbol} 的现有 Skill 结果，不补写缺失数据。",
-            "本轮不给出目标价、买卖意见或收益承诺。",
+            overall,
+            f"评价范围：本轮只使用 {symbol} 的公司研究证据与审计结果，不补写缺失数据，也不提供具体价格预测、交易指令或收益承诺。",
         ]
         risk_boundaries = [
             "本内容仅供学习与研究，不构成任何投资建议。",

@@ -114,6 +114,8 @@ def _panda_mode(monkeypatch, tmp_path):
 
 
 def _install_fake_panda(monkeypatch, daily=None, daily_error=None):
+    from backend.skills.panda import DATASET_CALLS
+
     module = types.ModuleType("panda_data")
     module.__version__ = "0.0.12"
     module.init_token = lambda **kwargs: None
@@ -124,21 +126,10 @@ def _install_fake_panda(monkeypatch, daily=None, daily_error=None):
         return daily
 
     module.get_stock_daily = get_daily
-    for method in (
-        "get_stock_daily_pre",
-        "get_stock_daily_post",
-        "get_adj_factor",
-        "get_stock_dividend",
-        "get_stock_cash_dividend",
-        "get_stock_split",
-        "get_stock_status_change",
-        "get_stock_detail",
-        "get_trade_list",
-        "get_index_weights",
-        "get_index_daily",
-        "get_factor",
-    ):
-        setattr(module, method, lambda **kwargs: _FakeFrame([]))
+    for method in {item[0] for item in DATASET_CALLS.values()}:
+        if method != "get_stock_daily":
+            setattr(module, method, lambda **kwargs: _FakeFrame([]))
+    module.get_trade_cal = lambda **kwargs: _FakeFrame([])
     monkeypatch.setitem(sys.modules, "panda_data", module)
     return module
 
@@ -154,6 +145,148 @@ def test_sz_symbol_uses_documented_a_share_trade_list_selector():
     assert start_method == end_method == "get_trade_list"
     assert start_params(request) == {"date": "20240101", "exchange": "SH"}
     assert end_params(request) == {"date": "20240131", "exchange": "SH"}
+
+
+def test_company_research_uses_documented_panda_endpoints():
+    from backend.skills.panda import DATASET_CALLS
+
+    request = _request(symbol="601628.SH")
+    industry_method, industry_params = DATASET_CALLS["industry"]
+    finance_method, finance_params = DATASET_CALLS["financial_performance"]
+    reports_method, reports_params = DATASET_CALLS["financial_reports"]
+
+    assert industry_method == "get_stock_industry"
+    assert industry_params(request) == {
+        "stock_symbol": "601628.SH",
+        "level": "L1",
+    }
+    assert finance_method == "get_fina_performance"
+    params = finance_params(request)
+    assert params["symbol"] == "601628.SH"
+    assert "operating_revenue_yoy" in params["fields"]
+    assert "net_profit_parent_yoy" in params["fields"]
+    assert "net_cash_flow_operating" in params["fields"]
+    assert reports_method == "get_fina_reports"
+    assert reports_params(request) == {
+        "symbol": "601628.SH",
+        "start_quarter": "2023q1",
+        "end_quarter": "2024q1",
+        "date": "20240131",
+        "is_latest": True,
+        "fields": [],
+    }
+
+
+def test_extended_research_registry_uses_high_value_panda_endpoints():
+    from backend.skills.panda import DATASET_CALLS
+
+    expected = {
+        "financial_forecast": "get_fina_forecast",
+        "audit_opinion": "get_audit_opinion",
+        "industry_detail": "get_industry_detail",
+        "index_indicator": "get_index_indicator",
+        "margin": "get_margin",
+        "northbound_holding": "get_hsgt_hold",
+        "holder_count": "get_holder_count",
+        "top_holders": "get_top_holders",
+        "stock_pledge": "get_stock_pledge",
+        "shareholder_change": "get_stock_shareholder_change",
+        "repurchase": "get_repurchase",
+        "restricted_release": "get_restricted_list",
+        "litigation": "get_stock_litigation_arbitration",
+        "material_contract": "get_stock_material_contract",
+        "macro_ir": "get_macro_ir",
+        "macro_mb": "get_macro_mb",
+    }
+
+    assert {name: DATASET_CALLS[name][0] for name in expected} == expected
+
+
+def test_sector_macro_router_covers_battery_and_food_industries():
+    from backend.skills.panda import MACRO_SECTOR_BY_INDUSTRY
+
+    assert MACRO_SECTOR_BY_INDUSTRY["电力设备"] == (
+        "get_macro_ep",
+        ["EP0000399", "EP0000400"],
+    )
+    assert MACRO_SECTOR_BY_INDUSTRY["食品饮料"] == (
+        "get_macro_fb",
+        ["FB0045844", "FB0045846"],
+    )
+
+
+def test_dynamic_router_only_adds_intraday_and_management_calls_when_requested():
+    from backend.skills.panda import _selected_dataset_names
+
+    ordinary = _selected_dataset_names(_request())
+    intraday = _selected_dataset_names(
+        ResearchRequest(
+            "600519.SH",
+            "cn",
+            "看一下盘中实时走势和管理层调研",
+            "20240101",
+            "20240131",
+        )
+    )
+
+    assert "stock_rt_minute" not in ordinary
+    assert "investor_brief" not in ordinary
+    assert {"stock_rt_daily", "stock_minute", "stock_rt_minute", "index_minute"} <= intraday
+    assert "investor_brief" in intraday
+
+
+def test_trading_date_resolver_uses_real_calendar_boundaries(monkeypatch, tmp_path):
+    panda, _ = _panda_mode(monkeypatch, tmp_path)
+    module = _install_fake_panda(monkeypatch, daily=_FakeFrame([]))
+    module.get_trade_cal = lambda **kwargs: _FakeFrame(
+        [
+            {"nature_date": "20240102"},
+            {"nature_date": "20240103"},
+            {"nature_date": "20240105"},
+        ]
+    )
+
+    resolved = panda.resolve_request_trading_dates(_request())
+
+    assert resolved.start_date == "20240102"
+    assert resolved.end_date == "20240105"
+
+
+def test_normalize_frame_converts_string_nan_before_parquet_serialization():
+    from backend.skills.panda import normalize_frame
+
+    frame = _FakeFrame(
+        [
+            {"date": "2024-01-02", "ratio": 1.2},
+            {"date": "2024-01-03", "ratio": "NaN"},
+        ]
+    )
+
+    normalized = normalize_frame(frame)
+
+    assert normalized.rows == [
+        {"date": "20240102", "ratio": 1.2},
+        {"date": "20240103", "ratio": None},
+    ]
+
+
+def test_peer_factor_router_always_keeps_target_with_large_industry(monkeypatch):
+    from backend.skills import panda
+
+    peers = [
+        {"stock_symbol": f"{index:06d}.SZ"}
+        for index in range(100)
+    ]
+    monkeypatch.setattr(panda, "_artifact_records", lambda artifact: peers)
+
+    calls = panda._peer_factor_call(
+        _request(symbol="601628.SH"),
+        {"industry_peers": object()},
+    )
+
+    symbols = calls["industry_peer_factors"][1]["symbol"]
+    assert len(symbols) == 40
+    assert "601628.SH" in symbols
 
 
 def test_empty_live_daily_is_insufficient_and_never_mock(monkeypatch, tmp_path):

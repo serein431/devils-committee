@@ -80,6 +80,9 @@ def test_argue_builds_persona_system_and_evidence_user(monkeypatch):
     assert "outcome=null 是正常值" in system
     assert "不得扩展为方向信号" in system
     assert "findings 本身不等于异常" in system
+    assert "盈利成长" in system
+    assert "第一句必须直接判断" in system
+    assert "project-company-fundamentals" in system
     assert "600519.SH" in user
     assert "skill-factor-ranking-sage" in user     # evidence JSON is passed through
 
@@ -126,6 +129,22 @@ def test_chair_line_uses_chair_persona():
     o.chair_line(symbol="300750.SZ", kind="consensus", payload=["a", "b"])
     _, body = o._client.calls[0]
     assert llm.PERSONAS["chair"]["name"] in body["messages"][0]["content"]
+
+
+def test_overall_assessment_prompt_answers_stock_strengths_before_tool_logs():
+    o = _openai_without_network()
+
+    o.chair_line(
+        symbol="601628.SH",
+        kind="overall_assessment",
+        payload={"positions": [], "audit_flags": []},
+    )
+
+    _, body = o._client.calls[0]
+    system = body["messages"][0]["content"]
+    assert "强在哪里、弱在哪里" in system
+    assert "综合判断：" in system
+    assert "内部 Skill 运行状态只有在会改变结论时才提" in system
 
 
 def test_get_llm_switches_on_mode_and_key(monkeypatch):

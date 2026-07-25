@@ -52,6 +52,7 @@ else:
     get_llm = None
 
 from backend.research_request import ResearchRequest
+from backend.skills.research import RESEARCH_PROFILE_IDS
 
 
 SKILL_IDS = {
@@ -62,7 +63,7 @@ SKILL_IDS = {
     "skill-factor-ranking-sage",
     "skill-model-hpo-evidence-driven",
 }
-SYMBOLS = ["600519.SH", "300750.SZ", "601318.SH"]
+SYMBOLS = ["601628.SH", "300750.SZ", "600519.SH"]
 
 
 def test_live_deepseek_v4_pro_minimal_reply():
@@ -106,6 +107,12 @@ def test_live_six_skill_results_exist(symbol):
         for item in evidence.results.values()
     )
     assert all(item.mode != "mock" for item in evidence.results.values())
+    assert set(evidence.analysis) == set(RESEARCH_PROFILE_IDS)
+    assert all(
+        item.status in {"success", "insufficient-evidence"}
+        for item in evidence.analysis.values()
+    )
+    assert all(item.mode != "mock" for item in evidence.analysis.values())
 
 
 @pytest.mark.parametrize("symbol", SYMBOLS)

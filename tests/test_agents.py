@@ -8,9 +8,16 @@ from backend.agents import (
     ChairAgent,
     MacroAgent,
     RiskAgent,
+    _claim_grounding_issue,
 )
 from backend.llm import MockLLM, OpenAICompatLLM
 from backend.models import AuditVerdict, Claim, evidence_from_result
+from backend.skills.contracts import SkillFinding, SkillResult
+from backend.skills.research import (
+    FUNDAMENTAL_PROFILE_ID,
+    MARKET_PROFILE_ID,
+    VALUATION_PROFILE_ID,
+)
 
 
 ALLOWED = {
@@ -40,6 +47,208 @@ def test_every_claim_cites_only_integrated_skills(evidence_fixture):
         assert claim.evidence
         assert all(item.skill_id in ALLOWED for item in claim.evidence)
         assert all(item.dataset_hashes for item in claim.evidence)
+
+
+def test_runtime_profiles_make_agents_discuss_the_stock_not_only_audits(
+    evidence_fixture,
+):
+    evidence = copy.deepcopy(evidence_fixture)
+    evidence.analysis = {
+        skill_id: SkillResult(
+            skill_id=skill_id,
+            mode="mock",
+            status="success",
+            duration_ms=0,
+            dataset_hashes=["daily-hash"],
+            metrics={"score": 1},
+            findings=[SkillFinding(f"{skill_id} research", ["daily"], 0.8)],
+        )
+        for skill_id in (
+            FUNDAMENTAL_PROFILE_ID,
+            VALUATION_PROFILE_ID,
+            MARKET_PROFILE_ID,
+        )
+    }
+    agents = [
+        BullAgent(MockLLM()),
+        BearAgent(MockLLM()),
+        MacroAgent(MockLLM()),
+        RiskAgent(MockLLM()),
+    ]
+
+    claims = {
+        agent.side: asyncio.run(agent.argue(evidence))[0]
+        for agent in agents
+    }
+
+    assert FUNDAMENTAL_PROFILE_ID in claims["bull"].skills_used
+    assert VALUATION_PROFILE_ID in claims["bear"].skills_used
+    assert MARKET_PROFILE_ID in claims["macro"].skills_used
+    assert MARKET_PROFILE_ID in claims["risk"].skills_used
+    assert "skill-model-hpo-evidence-driven" not in claims["risk"].skills_used
+    assert "skill-portfolio-liquidity-stress-test" not in claims["bull"].skills_used
+    assert "skill-portfolio-liquidity-stress-test" not in claims["macro"].skills_used
+
+
+def test_grounding_guard_rejects_invented_profit_cause():
+    claim = Claim(
+        id="bull-2",
+        agent="Bull",
+        side="bull",
+        text="利润降幅更可能指向短期投资损益或准备金计提。",
+        kind="rebuttal",
+        round=2,
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "未提供的利润变化原因" in issue[0]
+
+
+def test_grounding_guard_rejects_holder_identity_and_sell_pressure():
+    claim = Claim(
+        id="risk-1",
+        agent="Risk",
+        side="risk",
+        text="股东户数增加说明筹码从机构或大户向散户转移，并增加抛售压力。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "不能识别筹码" in issue[0]
+
+
+def test_grounding_guard_allows_explicit_caveat():
+    claim = Claim(
+        id="risk-1",
+        agent="Risk",
+        side="risk",
+        text="股东户数增加只说明持股更分散，不能推断筹码向散户转移。",
+    )
+
+    assert _claim_grounding_issue(claim) is None
+
+
+def test_grounding_guard_does_not_treat_cannot_rule_out_as_evidence():
+    claim = Claim(
+        id="bull-2",
+        agent="Bull",
+        side="bull",
+        text="不能排除利润下降由准备金计提导致。",
+        kind="rebuttal",
+        round=2,
+    )
+
+    assert _claim_grounding_issue(claim) is not None
+
+
+def test_grounding_guard_rejects_valuation_conclusion_without_percentiles():
+    claim = Claim(
+        id="bull-1",
+        agent="Bull",
+        side="bull",
+        text="公司PE与沪深300接近，并未出现明显的估值压力。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "缺少同行估值和历史分位" in issue[0]
+
+
+def test_grounding_guard_rejects_financial_cash_flow_quality_inference():
+    claim = Claim(
+        id="risk-1",
+        agent="Risk",
+        side="risk",
+        text="经营现金流同比下降，说明主业造血能力在减弱。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "金融企业" in issue[0]
+
+
+def test_audit_marks_grounding_violation_as_thin_data(evidence_fixture):
+    claim = Claim(
+        id="bull-2",
+        agent="Bull",
+        side="bull",
+        text="利润降幅更可能指向短期投资损益或准备金计提。",
+        kind="rebuttal",
+        round=2,
+    )
+
+    verdict = asyncio.run(
+        AuditAgent(MockLLM()).audit(evidence_fixture, [claim])
+    )[0]
+
+    assert verdict.status == "thin_data"
+    assert verdict.audit_skill == "project-grounding-guard"
+    assert "删除具体原因推断" in verdict.remediation
+
+
+def test_chair_falls_back_to_profiles_when_summary_overreaches(evidence_fixture):
+    class UnsafeChairLLM(MockLLM):
+        def chair_line(self, *, symbol, kind, payload):
+            if kind == "overall_assessment":
+                return "综合判断：估值缺乏安全边际，近期上涨只是短期反弹。"
+            return super().chair_line(symbol=symbol, kind=kind, payload=payload)
+
+    evidence = copy.deepcopy(evidence_fixture)
+    evidence.analysis = {
+        FUNDAMENTAL_PROFILE_ID: SkillResult(
+            skill_id=FUNDAMENTAL_PROFILE_ID,
+            mode="mock",
+            status="success",
+            duration_ms=0,
+            dataset_hashes=["fundamental-hash"],
+            metrics={
+                "revenue_yoy_pct": -15.33,
+                "net_profit_yoy_pct": -32.28,
+                "direction": "negative",
+            },
+        ),
+        MARKET_PROFILE_ID: SkillResult(
+            skill_id=MARKET_PROFILE_ID,
+            mode="mock",
+            status="success",
+            duration_ms=0,
+            dataset_hashes=["market-hash"],
+            metrics={
+                "return_60d_pct": 11.77,
+                "relative_to_csi300_60d_pct": 14.32,
+                "volatility_60d_ann_pct": 41.09,
+                "max_drawdown_120d_pct": -34.65,
+                "direction": "positive",
+            },
+        ),
+        VALUATION_PROFILE_ID: SkillResult(
+            skill_id=VALUATION_PROFILE_ID,
+            mode="mock",
+            status="success",
+            duration_ms=0,
+            dataset_hashes=["valuation-hash"],
+            metrics={"pe_estimate": 14.6, "pb_estimate": 1.86},
+        ),
+    }
+
+    result = asyncio.run(
+        ChairAgent(UnsafeChairLLM()).synthesize(
+            "601628.SH",
+            [],
+            [],
+            evidence,
+        )
+    )
+
+    assert "强项是近60日收益 11.77%" in result["consensus"][0]
+    assert "弱项是营收同比 -15.33%" in result["consensus"][0]
+    assert "缺少同行与历史分位时不判断高低" in result["consensus"][0]
+    assert "只是短期反弹" not in result["consensus"][0]
 
 
 def test_available_result_is_not_downgraded_by_an_unavailable_peer_skill(
@@ -343,6 +552,7 @@ def test_chair_only_uses_audit_passed_rebuttals_for_disagreement():
     )
     disagreement = result["open_disagreements"][0]
 
+    assert result["consensus"][0].startswith("综合判断：")
     assert "有效回应" in disagreement.bear_view
     assert "无效回应" not in disagreement.bull_view
     assert any("bear-2" in item for item in result["risk_boundaries"])
