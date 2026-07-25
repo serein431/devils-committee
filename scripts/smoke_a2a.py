@@ -60,8 +60,11 @@ def _req(
     token: str | None = None,
     timeout: int = REQUEST_TIMEOUT,
     accept: str = "application/json",
+    extra_headers: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     headers = {"Content-Type": "application/json", "Accept": accept}
+    if extra_headers:
+        headers.update(extra_headers)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     data = json.dumps(body).encode() if body is not None else None
@@ -96,12 +99,20 @@ def _research_body(ticker: str, *, skill: str = "debate_case") -> dict:
     return {"skill": skill, "topic": ticker}
 
 
-def _v1_body(method: str, research: dict, request_id: str) -> dict:
+def _v1_body(
+    method: str,
+    research: dict,
+    request_id: str,
+    *,
+    configuration: dict | None = None,
+    task_id: str | None = None,
+    context_id: str | None = None,
+) -> dict:
     metadata = dict(research)
     skill = metadata.pop("skill", "debate_case")
     text = metadata.get("question") or metadata.get("topic") or ""
     metadata["skill"] = skill
-    return {
+    body = {
         "jsonrpc": "2.0",
         "id": request_id,
         "method": method,
@@ -114,6 +125,17 @@ def _v1_body(method: str, research: dict, request_id: str) -> dict:
             "metadata": metadata,
         },
     }
+    if configuration is not None:
+        body["params"]["configuration"] = configuration
+    if task_id is not None:
+        body["params"]["message"]["taskId"] = task_id
+    if context_id is not None:
+        body["params"]["message"]["contextId"] = context_id
+    return body
+
+
+def _v1_headers(version: str = "1.0") -> dict[str, str]:
+    return {"A2A-Version": version}
 
 
 def _task_payload(task: dict) -> dict:
@@ -202,7 +224,66 @@ def main() -> int:
             f"{base}/a2a",
             method="POST",
             token=args.token,
-            body=_v1_body("SendMessage", debate_body, "smoke-send"),
+            body=_v1_body("SendMessage", debate_body, "smoke-version"),
+            extra_headers=_v1_headers("9.0"),
+        )
+        payload = json.loads(body)
+        check(
+            "unsupported A2A version returns -32009",
+            status == 200 and payload.get("error", {}).get("code") == -32009,
+        )
+    except Exception as exc:
+        check("unsupported A2A version", False, type(exc).__name__)
+
+    try:
+        status, body = _req(
+            f"{base}/a2a",
+            method="POST",
+            token=args.token,
+            body=_v1_body("SendMessage", debate_body, "smoke-no-version"),
+        )
+        payload = json.loads(body)
+        check(
+            "missing version header uses 0.3 method rules",
+            status == 200 and payload.get("error", {}).get("code") == -32601,
+        )
+    except Exception as exc:
+        check("missing version header", False, type(exc).__name__)
+
+    try:
+        status, body = _req(
+            f"{base}/a2a",
+            method="POST",
+            token=args.token,
+            body=_v1_body(
+                "SendMessage",
+                debate_body,
+                "smoke-missing-task",
+                task_id="missing-task",
+                context_id="missing-context",
+            ),
+            extra_headers=_v1_headers(),
+        )
+        payload = json.loads(body)
+        check(
+            "unknown taskId returns -32001",
+            status == 200 and payload.get("error", {}).get("code") == -32001,
+        )
+    except Exception as exc:
+        check("unknown taskId", False, type(exc).__name__)
+
+    try:
+        status, body = _req(
+            f"{base}/a2a",
+            method="POST",
+            token=args.token,
+            body=_v1_body(
+                "SendMessage",
+                debate_body,
+                "smoke-send",
+                configuration={"historyLength": 0},
+            ),
+            extra_headers=_v1_headers(),
         )
         response = json.loads(body)
         task = response["result"]["task"]
@@ -215,11 +296,17 @@ def main() -> int:
             status == 200
             and task.get("status", {}).get("state") == "TASK_STATE_COMPLETED"
         ))
+        check("SendMessage respects historyLength:0", task.get("history") == [])
         check(
-            "debate data_status success",
-            meta.get("data_status") == "success",
+            "debate data status is explicit",
+            meta.get("data_status") in {"success", "insufficient-evidence"},
             f"symbol={meta.get('symbol', 'unknown')}",
         )
+        if meta.get("data_status") == "insufficient-evidence":
+            check(
+                "insufficient evidence emits no claims or verdicts",
+                result.get("claims") == [] and result.get("verdicts") == [],
+            )
         check("debate carries disclaimer", bool(result.get("disclaimer")))
         elapsed = result.get("elapsed_sec")
         check(
@@ -250,6 +337,7 @@ def main() -> int:
                 "method": "GetTask",
                 "params": {"id": task_id, "historyLength": 1},
             },
+            extra_headers=_v1_headers(),
         )
         stored = json.loads(get_body).get("result", {})
         check("GetTask retrieves completed Task", (
@@ -257,6 +345,24 @@ def main() -> int:
             and stored.get("id") == task_id
             and stored.get("status", {}).get("state") == "TASK_STATE_COMPLETED"
         ))
+        subscribe_status, subscribe_body = _req(
+            f"{base}/a2a",
+            method="POST",
+            token=args.token,
+            body={
+                "jsonrpc": "2.0",
+                "id": "smoke-subscribe",
+                "method": "SubscribeToTask",
+                "params": {"id": task_id},
+            },
+            extra_headers=_v1_headers(),
+        )
+        subscribe = json.loads(subscribe_body)
+        check(
+            "SubscribeToTask rejects terminal Task with -32004",
+            subscribe_status == 200
+            and subscribe.get("error", {}).get("code") == -32004,
+        )
     except Exception as exc:
         check("SendMessage debate_case", False, type(exc).__name__)
 
@@ -270,6 +376,7 @@ def main() -> int:
                 _research_body(args.ticker, skill="audit_claims"),
                 "smoke-audit",
             ),
+            extra_headers=_v1_headers(),
         )
         payload = json.loads(body)
         task = payload.get("result", {}).get("task", {})
@@ -280,8 +387,12 @@ def main() -> int:
             and task.get("status", {}).get("state") == "TASK_STATE_COMPLETED",
         )
         check(
-            "audit_claims returns verdict list",
-            isinstance(audit.get("audits"), list),
+            "audit_claims returns an honest result",
+            isinstance(audit.get("audits"), list)
+            and (
+                audit.get("data_status") != "insufficient-evidence"
+                or audit.get("audits") == []
+            ),
         )
     except Exception as exc:
         check("POST audit_claims", False, type(exc).__name__)
@@ -294,6 +405,7 @@ def main() -> int:
             token=args.token,
             body=_v1_body("SendStreamingMessage", boundary, "smoke-stream"),
             accept="text/event-stream",
+            extra_headers=_v1_headers(),
         )
         events = _sse_events(body)
         first_task = events[0]["result"]["task"] if events else {}
@@ -317,6 +429,7 @@ def main() -> int:
                 f"{base}/a2a",
                 method="POST",
                 body=_v1_body("SendMessage", debate_body, "smoke-auth"),
+                extra_headers=_v1_headers(),
             )
             check("auth: 401 without token", status == 401, f"status={status}")
         except Exception as exc:

@@ -19,7 +19,7 @@ from .compliance import DISCLAIMER, enforce, enforce_dict, scrub
 from .config import CONFIG
 from .llm import get_llm
 from .models import AuditVerdict, Claim, DebateResult
-from .plain import plain_claim
+from .plain import plain_audit, plain_claim
 from .research_request import ResearchRequest, symbol_from_text
 from .skills.runner import ResearchEvidence, SkillRunner
 
@@ -33,6 +33,7 @@ _PUBLIC_DATA_ERROR = "研究数据暂不可用，请稍后重试。"
 _PUBLIC_INSUFFICIENT = "当前没有足够的授权数据支持研究。"
 _PUBLIC_UNSUPPORTED = "当前真实研究只支持 A 股代码。"
 _NO_MOCK_SUBSTITUTE = "当前结果没有使用模拟数据代替真实证据。"
+_UNAVAILABLE_SKILL_STATUSES = {"error", "insufficient-evidence"}
 
 
 def _empty_result(
@@ -41,19 +42,22 @@ def _empty_result(
     data_status: str,
     reason: str,
     elapsed_sec: float,
+    skills_manifest: dict | None = None,
 ) -> DebateResult:
     """Build a compliant public result without exposing private failures."""
 
-    manifest = {
-        "data": {
-            "symbol": request.symbol,
-            "status": data_status,
-            "mode": None,
-            "dataset_hashes": [],
-        },
-        "results": [],
-        "all_skills": [],
-    }
+    manifest = skills_manifest
+    if manifest is None:
+        manifest = {
+            "data": {
+                "symbol": request.symbol,
+                "status": data_status,
+                "mode": None,
+                "dataset_hashes": [],
+            },
+            "results": [],
+            "all_skills": [],
+        }
     return enforce(
         DebateResult(
             topic=request.question,
@@ -148,12 +152,16 @@ class DebateOrchestrator:
             yield {"stage": "result", "result": self.result.to_dict()}
             return
 
-        if evidence.bundle.status != "success":
+        if (
+            evidence.bundle.status != "success"
+            or not _has_publishable_evidence(evidence)
+        ):
             self.result = _empty_result(
                 request,
                 data_status="insufficient-evidence",
                 reason=_PUBLIC_INSUFFICIENT,
                 elapsed_sec=round(_mono() - started, 2),
+                skills_manifest=self._skills_manifest(evidence, []),
             )
             yield {"stage": "result", "result": self.result.to_dict()}
             return
@@ -250,6 +258,7 @@ class DebateOrchestrator:
                     self.audit.audit(evidence, claims),
                     timeout=_require_remaining(deadline),
                 )
+                _normalize_missing_evidence_verdicts(claims, verdicts)
                 for verdict in verdicts:
                     if verdict.passed:
                         continue
@@ -422,12 +431,16 @@ class DebateOrchestrator:
                 elapsed_sec=round(_mono() - started, 2),
             )
 
-        if evidence.bundle.status != "success":
+        if (
+            evidence.bundle.status != "success"
+            or not _has_publishable_evidence(evidence)
+        ):
             return _empty_audit_payload(
                 request,
                 data_status="insufficient-evidence",
                 reason=_PUBLIC_INSUFFICIENT,
                 elapsed_sec=round(_mono() - started, 2),
+                skills_manifest=self._skills_manifest(evidence, []),
             )
 
         try:
@@ -443,6 +456,7 @@ class DebateOrchestrator:
                 self.audit.audit(evidence, claims),
                 timeout=_require_remaining(deadline),
             )
+            _normalize_missing_evidence_verdicts(claims, verdicts)
         except asyncio.TimeoutError:
             return _empty_audit_payload(
                 request,
@@ -519,12 +533,14 @@ def _empty_audit_payload(
     data_status: str,
     reason: str,
     elapsed_sec: float,
+    skills_manifest: dict | None = None,
 ) -> dict:
     result = _empty_result(
         request,
         data_status=data_status,
         reason=reason,
         elapsed_sec=elapsed_sec,
+        skills_manifest=skills_manifest,
     )
     return enforce_dict(
         {
@@ -566,6 +582,47 @@ def _evidence_modes(evidence: ResearchEvidence) -> list[str]:
     modes.update(result.mode for result in evidence.results.values())
     allowed = {"live", "cache", "precomputed", "mock"}
     return sorted(mode for mode in modes if mode in allowed)
+
+
+def _has_publishable_evidence(evidence: ResearchEvidence) -> bool:
+    """Return whether any integrated Skill completed successfully."""
+
+    return any(result.status == "success" for result in evidence.results.values())
+
+
+def _normalize_missing_evidence_verdicts(
+    claims: list[Claim],
+    verdicts: list[AuditVerdict],
+) -> None:
+    """Never publish a pass for a claim that cites unavailable evidence."""
+
+    claims_by_id = {claim.id: claim for claim in claims}
+    for verdict in verdicts:
+        if verdict.status != "pass":
+            continue
+        claim = claims_by_id.get(verdict.claim_id)
+        if claim is None:
+            continue
+        unavailable = next(
+            (
+                item
+                for item in claim.evidence
+                if item.status in _UNAVAILABLE_SKILL_STATUSES
+            ),
+            None,
+        )
+        if unavailable is None:
+            continue
+        verdict.status = "missing_evidence"
+        verdict.reason = (
+            f"资料缺失：{unavailable.skill_id} 当前没有可发布证据，"
+            "不能完成该论据的审计。"
+        )
+        verdict.audit_skill = unavailable.skill_id
+        verdict.severity = "medium"
+        verdict.remediation = "补齐缺失字段并重新运行对应 QuantSkill。"
+        verdict.provenance = unavailable.mode
+        verdict.plain = plain_audit("missing_evidence")
 
 
 def _as_request(topic: str | ResearchRequest) -> ResearchRequest:

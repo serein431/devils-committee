@@ -131,6 +131,138 @@ def test_non_success_bundle_returns_insufficient_evidence(
     assert "当前没有足够的授权数据支持研究。" in result.risk_boundaries
 
 
+def test_all_unavailable_skills_return_empty_insufficient_evidence(
+    monkeypatch,
+    evidence_fixture,
+):
+    evidence = copy.deepcopy(evidence_fixture)
+    for index, skill_result in enumerate(evidence.results.values()):
+        skill_result.status = (
+            "error" if index % 2 else "insufficient-evidence"
+        )
+        skill_result.findings = []
+        skill_result.metrics = {}
+        skill_result.warnings = ["required evidence unavailable"]
+
+    async def prepare(self, request):
+        return evidence
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空"))
+
+    assert result.meta["data_status"] == "insufficient-evidence"
+    assert result.claims == []
+    assert result.verdicts == []
+    assert result.consensus == []
+    assert result.open_disagreements == []
+    assert not any(
+        verdict.status == "pass"
+        for verdict in result.verdicts
+    )
+    manifest = result.meta["skills_manifest"]
+    assert manifest["data"] == {
+        "symbol": evidence.request.symbol,
+        "status": evidence.bundle.status,
+        "mode": evidence.bundle.mode,
+        "dataset_hashes": evidence.bundle.dataset_hashes,
+    }
+    assert {
+        item["skill_id"]: {
+            "status": item["status"],
+            "mode": item["mode"],
+            "warnings": item["warnings"],
+        }
+        for item in manifest["results"]
+    } == {
+        skill_id: {
+            "status": skill_result.status,
+            "mode": skill_result.mode,
+            "warnings": skill_result.warnings,
+        }
+        for skill_id, skill_result in evidence.results.items()
+    }
+
+
+def test_audit_claims_stops_when_all_skills_are_unavailable(
+    monkeypatch,
+    evidence_fixture,
+):
+    evidence = copy.deepcopy(evidence_fixture)
+    for skill_result in evidence.results.values():
+        skill_result.status = "insufficient-evidence"
+        skill_result.findings = []
+        skill_result.metrics = {}
+        skill_result.warnings = ["required evidence unavailable"]
+
+    async def prepare(self, request):
+        return evidence
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().audit_claims("审计 600519"))
+
+    assert result["data_status"] == "insufficient-evidence"
+    assert result["audits"] == []
+    assert result["n_claims"] == 0
+    manifest = result["skills_manifest"]
+    assert manifest["data"] == {
+        "symbol": evidence.request.symbol,
+        "status": evidence.bundle.status,
+        "mode": evidence.bundle.mode,
+        "dataset_hashes": evidence.bundle.dataset_hashes,
+    }
+    assert {
+        item["skill_id"]: {
+            "status": item["status"],
+            "mode": item["mode"],
+            "warnings": item["warnings"],
+        }
+        for item in manifest["results"]
+    } == {
+        skill_id: {
+            "status": skill_result.status,
+            "mode": skill_result.mode,
+            "warnings": skill_result.warnings,
+        }
+        for skill_id, skill_result in evidence.results.items()
+    }
+
+
+def test_one_publishable_skill_keeps_debate_and_marks_missing_claim_evidence(
+    monkeypatch,
+    evidence_fixture,
+):
+    evidence = copy.deepcopy(evidence_fixture)
+    factor_skill = "skill-factor-ranking-sage"
+    for skill_id, skill_result in evidence.results.items():
+        if skill_id == factor_skill:
+            continue
+        skill_result.status = "insufficient-evidence"
+        skill_result.findings = []
+        skill_result.metrics = {}
+        skill_result.warnings = ["required evidence unavailable"]
+
+    async def prepare(self, request):
+        return evidence
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("600519 多空"))
+
+    assert result.meta["data_status"] == "success"
+    assert {claim.side for claim in result.claims} == {
+        "bull",
+        "bear",
+        "macro",
+        "risk",
+    }
+    assert len(result.verdicts) == len(result.claims)
+    by_id = {claim.id: claim for claim in result.claims}
+    for verdict in result.verdicts:
+        claim = by_id[verdict.claim_id]
+        if any(item.status != "success" for item in claim.evidence):
+            assert verdict.status == "missing_evidence"
+            assert "缺失" in verdict.reason
+
+
 def test_one_agent_failure_only_removes_that_agents_claims(
     monkeypatch,
     evidence_fixture,

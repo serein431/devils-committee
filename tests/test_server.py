@@ -17,12 +17,12 @@ client = TestClient(a2a_server.app)
 
 @pytest.fixture(autouse=True)
 def _clear_a2a_task_state():
-    for name in ("_TASKS", "_TASK_RUNNERS"):
+    for name in ("_TASKS", "_TASK_RUNNERS", "_TASK_SUBSCRIBERS"):
         store = getattr(a2a_server, name, None)
         if store is not None:
             store.clear()
     yield
-    for name in ("_TASKS", "_TASK_RUNNERS"):
+    for name in ("_TASKS", "_TASK_RUNNERS", "_TASK_SUBSCRIBERS"):
         store = getattr(a2a_server, name, None)
         if store is not None:
             store.clear()
@@ -336,7 +336,14 @@ def test_a2a_jsonrpc_audit_claims_stream_stays_sse(monkeypatch):
     assert "601318.SH" in event["result"]["parts"][0]["text"]
 
 
-def _v1_request(method: str, text: str, *, configuration: dict | None = None) -> dict:
+def _v1_request(
+    method: str,
+    text: str,
+    *,
+    configuration: dict | None = None,
+    task_id: str | None = None,
+    context_id: str | None = None,
+) -> dict:
     params = {
         "message": {
             "messageId": f"input-{method}",
@@ -347,12 +354,53 @@ def _v1_request(method: str, text: str, *, configuration: dict | None = None) ->
     }
     if configuration is not None:
         params["configuration"] = configuration
+    if task_id is not None:
+        params["message"]["taskId"] = task_id
+    if context_id is not None:
+        params["message"]["contextId"] = context_id
     return {
         "jsonrpc": "2.0",
         "id": f"rpc-{method}",
         "method": method,
         "params": params,
     }
+
+
+def _v1_headers(version: str = "1.0") -> dict[str, str]:
+    return {"A2A-Version": version}
+
+
+def test_a2a_rejects_unsupported_protocol_version():
+    response = client.post(
+        "/a2a",
+        json=_v1_request("SendMessage", "研究 600519.SH"),
+        headers=_v1_headers("9.0"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] == {
+        "code": -32009,
+        "message": "Version not supported",
+    }
+
+
+def test_a2a_missing_version_header_uses_legacy_method_semantics(monkeypatch):
+    called = False
+
+    async def fake_run(self, research_request):
+        nonlocal called
+        called = True
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    response = client.post(
+        "/a2a",
+        json=_v1_request("SendMessage", "研究 600519.SH"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == -32601
+    assert called is False
 
 
 def test_a2a_v1_send_message_returns_completed_task(monkeypatch):
@@ -364,6 +412,7 @@ def test_a2a_v1_send_message_returns_completed_task(monkeypatch):
     response = client.post(
         "/a2a",
         json=_v1_request("SendMessage", "研究 600519.SH 的复权风险"),
+        headers=_v1_headers(),
     )
 
     assert response.status_code == 200
@@ -380,6 +429,107 @@ def test_a2a_v1_send_message_returns_completed_task(monkeypatch):
     assert task["artifacts"][0]["parts"][0]["data"]["meta"]["symbol"] == "600519.SH"
 
 
+@pytest.mark.parametrize(("history_length", "roles"), [(0, []), (1, ["ROLE_AGENT"])])
+def test_a2a_v1_send_message_applies_configuration_history_length(
+    monkeypatch,
+    history_length,
+    roles,
+):
+    async def fake_run(self, research_request):
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    response = client.post(
+        "/a2a",
+        json=_v1_request(
+            "SendMessage",
+            "研究 600519.SH 的风险",
+            configuration={"historyLength": history_length},
+        ),
+        headers=_v1_headers(),
+    )
+
+    task = response.json()["result"]["task"]
+    assert [message["role"] for message in task["history"]] == roles
+
+
+def test_a2a_v1_message_task_id_must_exist():
+    response = client.post(
+        "/a2a",
+        json=_v1_request(
+            "SendMessage",
+            "继续研究 600519.SH",
+            task_id="missing-task",
+            context_id="missing-context",
+        ),
+        headers=_v1_headers(),
+    )
+
+    assert response.json()["error"] == {
+        "code": -32001,
+        "message": "Task not found",
+    }
+
+
+def test_a2a_v1_message_task_id_requires_matching_context(monkeypatch):
+    async def fake_run(self, research_request):
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    first = client.post(
+        "/a2a",
+        json=_v1_request("SendMessage", "研究 600519.SH"),
+        headers=_v1_headers(),
+    ).json()["result"]["task"]
+    response = client.post(
+        "/a2a",
+        json=_v1_request(
+            "SendMessage",
+            "继续研究 600519.SH",
+            task_id=first["id"],
+            context_id="wrong-context",
+        ),
+        headers=_v1_headers(),
+    )
+
+    assert response.json()["error"] == {
+        "code": -32602,
+        "message": "Invalid params",
+    }
+
+
+def test_a2a_v1_message_can_continue_matching_task(monkeypatch):
+    async def fake_run(self, research_request):
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    first = client.post(
+        "/a2a",
+        json=_v1_request("SendMessage", "研究 600519.SH"),
+        headers=_v1_headers(),
+    ).json()["result"]["task"]
+    response = client.post(
+        "/a2a",
+        json=_v1_request(
+            "SendMessage",
+            "继续研究 600519.SH",
+            task_id=first["id"],
+            context_id=first["contextId"],
+        ),
+        headers=_v1_headers(),
+    )
+
+    task = response.json()["result"]["task"]
+    assert task["id"] == first["id"]
+    assert task["contextId"] == first["contextId"]
+    assert [message["role"] for message in task["history"]] == [
+        "ROLE_USER",
+        "ROLE_AGENT",
+        "ROLE_USER",
+        "ROLE_AGENT",
+    ]
+
+
 def test_a2a_v1_stream_starts_with_task_and_finishes_with_status(monkeypatch):
     async def fake_stream(self, research_request, pace=0):
         yield {"stage": "data", "msg": "读取真实数据"}
@@ -392,6 +542,7 @@ def test_a2a_v1_stream_starts_with_task_and_finishes_with_status(monkeypatch):
         "POST",
         "/a2a",
         json=_v1_request("SendStreamingMessage", "研究 300750.SZ 的流动性风险"),
+        headers=_v1_headers(),
     ) as response:
         assert response.status_code == 200
         events = [
@@ -418,15 +569,20 @@ def test_a2a_v1_get_task_returns_stored_task(monkeypatch):
     sent = client.post(
         "/a2a",
         json=_v1_request("SendMessage", "研究 601318.SH 的风险证据"),
+        headers=_v1_headers(),
     ).json()
     task_id = sent["result"]["task"]["id"]
 
-    response = client.post("/a2a", json={
-        "jsonrpc": "2.0",
-        "id": "rpc-get-001",
-        "method": "GetTask",
-        "params": {"id": task_id, "historyLength": 1},
-    })
+    response = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-get-001",
+            "method": "GetTask",
+            "params": {"id": task_id, "historyLength": 1},
+        },
+        headers=_v1_headers(),
+    )
 
     assert response.status_code == 200
     task = response.json()["result"]
@@ -436,16 +592,89 @@ def test_a2a_v1_get_task_returns_stored_task(monkeypatch):
 
 
 def test_a2a_v1_get_task_returns_standard_not_found_error():
-    response = client.post("/a2a", json={
-        "jsonrpc": "2.0",
-        "id": "rpc-get-missing",
-        "method": "GetTask",
-        "params": {"id": "missing-task"},
-    })
+    response = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-get-missing",
+            "method": "GetTask",
+            "params": {"id": "missing-task"},
+        },
+        headers=_v1_headers(),
+    )
 
     assert response.status_code == 200
     assert response.json()["error"]["code"] == -32001
     assert response.json()["error"]["message"] == "Task not found"
+
+
+def test_a2a_v1_subscribe_to_terminal_task_returns_not_supported(monkeypatch):
+    async def fake_run(self, research_request):
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    task_id = client.post(
+        "/a2a",
+        json=_v1_request("SendMessage", "研究 600519.SH"),
+        headers=_v1_headers(),
+    ).json()["result"]["task"]["id"]
+    response = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-subscribe-terminal",
+            "method": "SubscribeToTask",
+            "params": {"id": task_id},
+        },
+        headers=_v1_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"] == {
+        "code": -32004,
+        "message": "Task not subscribable",
+    }
+
+
+def test_a2a_v1_subscribe_to_active_task_streams_until_terminal():
+    async def scenario():
+        task = a2a_server._new_task(
+            {
+                "messageId": "subscribe-input",
+                "role": "ROLE_USER",
+                "parts": [{"text": "研究 600519.SH"}],
+            },
+            skill="debate_case",
+        )
+        task_id = task["id"]
+        a2a_server._set_task_status(
+            task_id,
+            "TASK_STATE_WORKING",
+            "正在研究。",
+        )
+        response = await a2a_server._handle_v1({
+            "jsonrpc": "2.0",
+            "id": "rpc-subscribe-active",
+            "method": "SubscribeToTask",
+            "params": {"id": task_id},
+        })
+        first = json.loads((await anext(response.body_iterator)).removeprefix("data:"))
+        a2a_server._complete_task(
+            task_id,
+            _minimal_result("600519.SH").to_dict(),
+            skill="debate_case",
+        )
+        remaining = []
+        async for raw in response.body_iterator:
+            remaining.append(json.loads(raw.removeprefix("data:")))
+        return first, remaining
+
+    first, remaining = asyncio.run(scenario())
+    assert first["result"]["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+    assert any("artifactUpdate" in event["result"] for event in remaining)
+    assert remaining[-1]["result"]["statusUpdate"]["status"]["state"] == (
+        "TASK_STATE_COMPLETED"
+    )
 
 
 def test_a2a_v1_cancel_task_cancels_return_immediately_task(monkeypatch):
@@ -462,15 +691,20 @@ def test_a2a_v1_cancel_task_cancels_return_immediately_task(monkeypatch):
                 "研究 600519.SH 的风险",
                 configuration={"returnImmediately": True},
             ),
+            headers=_v1_headers(),
         ).json()
         task_id = sent["result"]["task"]["id"]
 
-        response = live_client.post("/a2a", json={
-            "jsonrpc": "2.0",
-            "id": "rpc-cancel-001",
-            "method": "CancelTask",
-            "params": {"id": task_id},
-        })
+        response = live_client.post(
+            "/a2a",
+            json={
+                "jsonrpc": "2.0",
+                "id": "rpc-cancel-001",
+                "method": "CancelTask",
+                "params": {"id": task_id},
+            },
+            headers=_v1_headers(),
+        )
 
     assert response.status_code == 200
     task = response.json()["result"]

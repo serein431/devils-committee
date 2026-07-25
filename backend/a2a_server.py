@@ -43,13 +43,20 @@ app.mount("/assets", StaticFiles(directory=WEB_ASSETS), name="assets")
 
 _TASKS: dict[str, dict[str, Any]] = {}
 _TASK_RUNNERS: dict[str, asyncio.Task] = {}
+_TASK_SUBSCRIBERS: dict[str, set[asyncio.Queue]] = {}
 _TERMINAL_STATES = {
     "TASK_STATE_COMPLETED",
     "TASK_STATE_FAILED",
     "TASK_STATE_CANCELED",
     "TASK_STATE_REJECTED",
 }
-_V1_METHODS = {"SendMessage", "SendStreamingMessage", "GetTask", "CancelTask"}
+_V1_METHODS = {
+    "SendMessage",
+    "SendStreamingMessage",
+    "GetTask",
+    "CancelTask",
+    "SubscribeToTask",
+}
 _LEGACY_METHODS = {"message/send", "message/stream"}
 
 
@@ -246,6 +253,11 @@ def _task_snapshot(task_id: str, history_length: int | None = None) -> dict:
     return task
 
 
+def _notify_subscribers(task_id: str, event: dict) -> None:
+    for queue in tuple(_TASK_SUBSCRIBERS.get(task_id, ())):
+        queue.put_nowait(deepcopy(event))
+
+
 def _set_task_status(task_id: str, state: str, text: str) -> dict:
     task = _TASKS[task_id]
     status = _task_status(
@@ -255,11 +267,13 @@ def _set_task_status(task_id: str, state: str, text: str) -> dict:
         text=text,
     )
     task["status"] = status
-    return {
+    update = {
         "taskId": task_id,
         "contextId": task["contextId"],
         "status": deepcopy(status),
     }
+    _notify_subscribers(task_id, {"statusUpdate": update})
+    return update
 
 
 def _result_artifact(task_id: str, payload: dict, *, skill: str) -> dict:
@@ -290,6 +304,7 @@ def _complete_task(task_id: str, payload: dict, *, skill: str) -> tuple[dict, di
         "append": False,
         "lastChunk": True,
     }
+    _notify_subscribers(task_id, {"artifactUpdate": artifact_update})
     status_update = _set_task_status(task_id, "TASK_STATE_COMPLETED", "研究任务已完成。")
     return artifact_update, status_update
 
@@ -326,6 +341,53 @@ def _v1_skill(params: dict) -> str:
     if isinstance(metadata, dict) and isinstance(metadata.get("skill"), str):
         return metadata["skill"]
     return params.get("skill", "debate_case")
+
+
+def _configuration_history_length(params: dict) -> tuple[int | None, bool]:
+    configuration = params.get("configuration")
+    if configuration is None:
+        return None, True
+    if not isinstance(configuration, dict):
+        return None, False
+    history_length = configuration.get("historyLength")
+    if history_length is None:
+        return None, True
+    if (
+        not isinstance(history_length, int)
+        or isinstance(history_length, bool)
+        or history_length < 0
+    ):
+        return None, False
+    return history_length, True
+
+
+def _task_for_message(
+    message: dict,
+    *,
+    skill: str,
+) -> tuple[dict | None, tuple[int, str] | None]:
+    task_id = message.get("taskId")
+    if task_id is None:
+        return _new_task(message, skill=skill), None
+    if not isinstance(task_id, str) or not task_id:
+        return None, (-32602, "Invalid params")
+    task = _TASKS.get(task_id)
+    if task is None:
+        return None, (-32001, "Task not found")
+    context_id = message.get("contextId")
+    if not isinstance(context_id, str) or context_id != task["contextId"]:
+        return None, (-32602, "Invalid params")
+    task["history"].append(
+        _normalise_user_message(
+            message,
+            context_id=context_id,
+            task_id=task_id,
+        )
+    )
+    task["artifacts"] = []
+    task["metadata"] = {"skill": skill}
+    _set_task_status(task_id, "TASK_STATE_SUBMITTED", "研究任务已提交。")
+    return task, None
 
 
 def _progress_text(event: dict) -> str | None:
@@ -465,6 +527,52 @@ async def _handle_v1(body: dict) -> JSONResponse | StreamingResponse:
             runner.cancel()
         return JSONResponse(_jsonrpc_result(request_id, _task_snapshot(task_id)))
 
+    if method == "SubscribeToTask":
+        task_id = params.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            return _v1_error(request_id, -32602, "Invalid params")
+        task = _TASKS.get(task_id)
+        if task is None:
+            return _v1_error(request_id, -32001, "Task not found")
+        if task["status"]["state"] in _TERMINAL_STATES:
+            return _v1_error(request_id, -32004, "Task not subscribable")
+
+        queue: asyncio.Queue = asyncio.Queue()
+        _TASK_SUBSCRIBERS.setdefault(task_id, set()).add(queue)
+        initial_update = {
+            "statusUpdate": {
+                "taskId": task_id,
+                "contextId": task["contextId"],
+                "status": deepcopy(task["status"]),
+            }
+        }
+
+        async def subscribe_v1():
+            try:
+                yield _sse(_jsonrpc_result(request_id, initial_update))
+                while True:
+                    event = await queue.get()
+                    yield _sse(_jsonrpc_result(request_id, event))
+                    status_update = event.get("statusUpdate")
+                    if (
+                        isinstance(status_update, dict)
+                        and status_update.get("status", {}).get("state")
+                        in _TERMINAL_STATES
+                    ):
+                        break
+            finally:
+                subscribers = _TASK_SUBSCRIBERS.get(task_id)
+                if subscribers is not None:
+                    subscribers.discard(queue)
+                    if not subscribers:
+                        _TASK_SUBSCRIBERS.pop(task_id, None)
+
+        return StreamingResponse(
+            subscribe_v1(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     message = params.get("message")
     if not _valid_v1_message(message):
         return _v1_error(request_id, -32602, "Invalid params")
@@ -475,8 +583,15 @@ async def _handle_v1(body: dict) -> JSONResponse | StreamingResponse:
     if not research_request.question:
         return _v1_error(request_id, -32602, "Invalid params")
 
+    history_length, valid_configuration = _configuration_history_length(params)
+    if not valid_configuration:
+        return _v1_error(request_id, -32602, "Invalid params")
+
     skill = _v1_skill(params)
-    task = _new_task(message, skill=skill)
+    task, task_error = _task_for_message(message, skill=skill)
+    if task_error is not None:
+        return _v1_error(request_id, *task_error)
+    assert task is not None
     task_id = task["id"]
 
     if method == "SendMessage":
@@ -485,7 +600,7 @@ async def _handle_v1(body: dict) -> JSONResponse | StreamingResponse:
             isinstance(configuration, dict)
             and configuration.get("returnImmediately") is True
         )
-        initial = _task_snapshot(task_id)
+        initial = _task_snapshot(task_id, history_length)
         runner = asyncio.create_task(
             _run_v1_task(task_id, research_request, skill=skill)
         )
@@ -494,11 +609,14 @@ async def _handle_v1(body: dict) -> JSONResponse | StreamingResponse:
             return JSONResponse(_jsonrpc_result(request_id, {"task": initial}))
         await runner
         return JSONResponse(
-            _jsonrpc_result(request_id, {"task": _task_snapshot(task_id)})
+            _jsonrpc_result(
+                request_id,
+                {"task": _task_snapshot(task_id, history_length)},
+            )
         )
 
     queue: asyncio.Queue = asyncio.Queue()
-    initial = _task_snapshot(task_id)
+    initial = _task_snapshot(task_id, history_length)
 
     async def stream_v1():
         runner = asyncio.create_task(
@@ -525,7 +643,11 @@ async def _handle_v1(body: dict) -> JSONResponse | StreamingResponse:
 
 
 @app.post("/a2a")
-async def a2a(request: Request, authorization: str | None = Header(default=None)):
+async def a2a(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    a2a_version: str | None = Header(default=None, alias="A2A-Version"),
+):
     _check_auth(authorization)
     try:
         body = await request.json()
@@ -536,10 +658,22 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
     jsonrpc = _is_jsonrpc(body)
     request_id = body.get("id") if jsonrpc else None
     method = body.get("method") if jsonrpc else None
-    if jsonrpc and method in _V1_METHODS:
-        return await _handle_v1(body)
-    if jsonrpc and method not in _LEGACY_METHODS:
-        return JSONResponse(_jsonrpc_error(request_id, -32601, "method not found"))
+    protocol_version = a2a_version.strip() if a2a_version else None
+    if protocol_version not in {None, "0.3", "1.0"}:
+        return JSONResponse(
+            _jsonrpc_error(request_id, -32009, "Version not supported")
+        )
+    if jsonrpc:
+        if protocol_version == "1.0":
+            if method in _V1_METHODS:
+                return await _handle_v1(body)
+            return JSONResponse(
+                _jsonrpc_error(request_id, -32601, "method not found")
+            )
+        if method not in _LEGACY_METHODS:
+            return JSONResponse(
+                _jsonrpc_error(request_id, -32601, "method not found")
+            )
     try:
         research_request = extract_research_request(body)
     except (TypeError, ValueError):
