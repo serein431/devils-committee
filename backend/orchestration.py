@@ -127,11 +127,32 @@ class DebateOrchestrator:
             yield {"stage": "result", "result": self.result.to_dict()}
             return
 
+        yield {
+            "stage": "data",
+            "symbol": request.symbol,
+            "elapsed_sec": 0,
+            "msg": f"正在为 {request.symbol} 读取真实数据并运行金融 Skills…",
+        }
+        prepare_task = asyncio.create_task(self.runner.prepare(request))
         try:
-            evidence = await asyncio.wait_for(
-                self.runner.prepare(request),
-                timeout=GLOBAL_BUDGET_SEC,
-            )
+            while not prepare_task.done():
+                remaining = deadline - _mono()
+                if remaining <= 0:
+                    prepare_task.cancel()
+                    await asyncio.gather(prepare_task, return_exceptions=True)
+                    raise asyncio.TimeoutError
+                done, _ = await asyncio.wait(
+                    {prepare_task}, timeout=min(10.0, remaining)
+                )
+                if not done:
+                    elapsed = round(_mono() - started)
+                    yield {
+                        "stage": "data",
+                        "symbol": request.symbol,
+                        "elapsed_sec": elapsed,
+                        "msg": f"真实数据与金融 Skills 仍在处理中（{elapsed} 秒）…",
+                    }
+            evidence = prepare_task.result()
         except asyncio.TimeoutError:
             self.result = _empty_result(
                 request,
@@ -151,6 +172,10 @@ class DebateOrchestrator:
             )
             yield {"stage": "result", "result": self.result.to_dict()}
             return
+        finally:
+            if not prepare_task.done():
+                prepare_task.cancel()
+                await asyncio.gather(prepare_task, return_exceptions=True)
 
         if (
             evidence.bundle.status != "success"
@@ -166,6 +191,12 @@ class DebateOrchestrator:
             yield {"stage": "result", "result": self.result.to_dict()}
             return
 
+        yield {
+            "stage": "skills",
+            "symbol": request.symbol,
+            "msg": "真实数据与金融 Skills 已就绪。",
+        }
+
         try:
             _require_remaining(deadline)
             yield {
@@ -175,76 +206,83 @@ class DebateOrchestrator:
             }
             agents = [self.bull, self.bear, self.macro, self.risk]
             claims: list[Claim] = []
-            for agent in agents:
-                delta_queue: asyncio.Queue[str | object] = asyncio.Queue()
-                stream_finished = object()
+            agent_queue: asyncio.Queue[tuple[str, object, object]] = asyncio.Queue()
+            announced = {agent.side: False for agent in agents}
 
-                async def collect_agent(current=agent):
-                    try:
-                        return await self._argue(
-                            current,
-                            evidence,
-                            deadline,
-                            on_delta=delta_queue.put,
-                        )
-                    finally:
-                        await delta_queue.put(stream_finished)
+            async def collect_agent(current):
+                async def forward_delta(delta):
+                    await agent_queue.put(("delta", current, delta))
 
-                task = asyncio.create_task(collect_agent())
-                announced = False
-                while True:
-                    delta = await asyncio.wait_for(
-                        delta_queue.get(),
-                        timeout=_require_remaining(deadline),
+                side_claims = await self._argue(
+                    current,
+                    evidence,
+                    deadline,
+                    on_delta=forward_delta,
+                )
+                await agent_queue.put(("done", current, side_claims))
+
+            agent_tasks = [asyncio.create_task(collect_agent(agent)) for agent in agents]
+            completed = 0
+            try:
+                while completed < len(agents):
+                    kind, agent, payload = await asyncio.wait_for(
+                        agent_queue.get(), timeout=_require_remaining(deadline)
                     )
-                    if delta is stream_finished:
-                        break
-                    if not announced:
+                    if kind == "delta":
+                        if not announced[agent.side]:
+                            yield {
+                                "stage": "claim_start",
+                                "id": f"{agent.side}-1",
+                                "agent": agent.__class__.__name__.removesuffix("Agent"),
+                                "side": agent.side,
+                            }
+                            announced[agent.side] = True
                         yield {
-                            "stage": "claim_start",
+                            "stage": "claim_delta",
                             "id": f"{agent.side}-1",
                             "agent": agent.__class__.__name__.removesuffix("Agent"),
                             "side": agent.side,
+                            "delta": payload,
                         }
-                        announced = True
-                    yield {
-                        "stage": "claim_delta",
-                        "id": f"{agent.side}-1",
-                        "agent": agent.__class__.__name__.removesuffix("Agent"),
-                        "side": agent.side,
-                        "delta": delta,
-                    }
+                        continue
 
-                side_claims = await task
-                for claim in side_claims:
-                    claim.plain = plain_claim(claim.side)
-                    claims.append(claim)
-                    if not announced:
+                    completed += 1
+                    side_claims = payload
+                    for claim in side_claims:
+                        claim.plain = plain_claim(claim.side)
+                        claims.append(claim)
+                        if not announced[agent.side]:
+                            yield {
+                                "stage": "claim_start",
+                                "id": claim.id,
+                                "agent": claim.agent,
+                                "side": claim.side,
+                            }
+                            announced[agent.side] = True
+                            yield {
+                                "stage": "claim_delta",
+                                "id": claim.id,
+                                "agent": claim.agent,
+                                "side": claim.side,
+                                "delta": claim.text,
+                            }
                         yield {
-                            "stage": "claim_start",
+                            "stage": "claim",
                             "id": claim.id,
                             "agent": claim.agent,
                             "side": claim.side,
+                            "text": claim.text,
+                            "plain": claim.plain,
+                            "confidence": claim.confidence,
+                            "skills_used": claim.skills_used,
+                            "evidence": [item.to_dict() for item in claim.evidence],
                         }
-                        yield {
-                            "stage": "claim_delta",
-                            "id": claim.id,
-                            "agent": claim.agent,
-                            "side": claim.side,
-                            "delta": claim.text,
-                        }
-                    yield {
-                        "stage": "claim",
-                        "id": claim.id,
-                        "agent": claim.agent,
-                        "side": claim.side,
-                        "text": claim.text,
-                        "plain": claim.plain,
-                        "confidence": claim.confidence,
-                        "skills_used": claim.skills_used,
-                        "evidence": [item.to_dict() for item in claim.evidence],
-                    }
-                await _pace_within_budget(pace, deadline)
+                    await _pace_within_budget(pace, deadline)
+            finally:
+                for task in agent_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*agent_tasks, return_exceptions=True)
 
             verdicts: list[AuditVerdict] = []
             for round_index in range(MAX_AUDIT_ROUNDS):

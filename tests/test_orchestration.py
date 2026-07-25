@@ -285,6 +285,36 @@ def test_one_agent_failure_only_removes_that_agents_claims(
     assert "private agent detail" not in repr(result.to_dict())
 
 
+def test_four_research_agents_run_concurrently(monkeypatch, evidence_fixture):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    active = 0
+    peak = 0
+
+    async def concurrent_argue(evidence, on_delta=None):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return []
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    orchestrator = DebateOrchestrator()
+    for agent in (
+        orchestrator.bull,
+        orchestrator.bear,
+        orchestrator.macro,
+        orchestrator.risk,
+    ):
+        monkeypatch.setattr(agent, "argue", concurrent_argue)
+
+    asyncio.run(orchestrator.run("600519 多空"))
+
+    assert peak == 4
+
+
 def test_debate_audits_each_shared_evidence_claim(monkeypatch, evidence_fixture):
     async def prepare(self, request):
         return evidence_fixture
@@ -378,7 +408,7 @@ def test_stream_forwards_llm_deltas_in_speaker_order(
     events = asyncio.run(collect_events())
 
     starts = [event["side"] for event in events if event.get("stage") == "claim_start"]
-    assert starts == ["bull", "bear", "macro", "risk"]
+    assert set(starts) == {"bull", "bear", "macro", "risk"}
     for side in starts:
         deltas = [
             event["delta"]

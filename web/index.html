@@ -358,7 +358,7 @@
   <div id="detailsStart" class="details-shell">
   <div class="hero">
     <h1>别人给你一个<span class="rev">结论</span>。<br>我们给你一个会<span class="rev">自我拆台</span>的委员会。</h1>
-    <p class="lead">六个 AI 就一个标的当面辩论，一个<b>独立审计 Agent</b> 逐条复核、抓存活偏差/坏数据/过拟合并当场驳回。
+    <p class="lead">四个研究 Agent 并行取证，随后由一个<b>独立审计 Agent</b>逐条复核、一个主持 Agent 汇总分歧，共六个 Agent。
       它不给买卖，只摊开分歧与风险——<b>教你自己当裁判</b>。每条结论回链到真实 QuantSkills 与数据。</p>
   </div>
 
@@ -856,6 +856,11 @@ function resultNarration(result){
 
 function handleEvent(ev){
   switch(ev.stage){
+    case "data":
+      $("#bSym").textContent=ev.symbol||"—";$("#bLive").textContent="DATA";
+      setStage(ev.msg||"正在读取真实数据并运行金融 Skills",true);return;
+    case "skills":
+      $("#bLive").textContent="SKILLS";setStage(ev.msg||"真实数据与金融 Skills 已就绪",true);return;
     case "argue":
       $("#bSym").textContent=ev.symbol||"—";$("#bLive").textContent="LIVE";
       lightPipe("argue");setStage("四个 Agent 就该标的并行取证",true);return;
@@ -1001,7 +1006,7 @@ async function run(){
   $("#auditSec").classList.add("hidden");$("#mapSec").classList.add("hidden");$("#sumSec").classList.add("hidden");
   $("#debateSec").classList.remove("hidden");
   document.querySelectorAll('.pstage').forEach(p=>p.classList.remove('on','done'));
-  setStage("开庭，六个 Agent 就该标的并行取证",true);
+  setStage("开庭：4 个研究 Agent 并行取证，审计与主持随后加入",true);
   try{
     const res=await fetch("/a2a?stream=1",{method:"POST",headers:{"Content-Type":"application/json","Accept":"text/event-stream"},
       body:JSON.stringify({skill:"debate_case",topic:q})});
