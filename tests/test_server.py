@@ -256,3 +256,35 @@ def test_a2a_jsonrpc_stream_returns_a_terminal_legacy_agent_message(monkeypatch)
     assert message["role"] == "agent"
     assert message["parts"][0]["kind"] == "text"
     assert "300750.SZ" in message["parts"][0]["text"]
+
+
+def test_a2a_jsonrpc_audit_claims_stream_stays_sse(monkeypatch):
+    async def fake_audit(self, research_request):
+        assert research_request.question == "审计 601318.SH 的分红证据"
+        return {"symbol": research_request.symbol, "claims": [], "verdicts": []}
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "audit_claims", fake_audit)
+    request_id = "rpc-audit-stream-001"
+    with client.stream("POST", "/a2a", json={
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "message/stream",
+        "params": {
+            "skill": "audit_claims",
+            "message": {
+                "role": "user",
+                "messageId": "message-audit-stream-001",
+                "parts": [{"kind": "text", "text": "审计 601318.SH 的分红证据"}],
+            },
+        },
+    }) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        lines = [line for line in response.iter_lines() if line.startswith("data:")]
+
+    assert len(lines) == 1
+    event = json.loads(lines[0].removeprefix("data:").strip())
+    assert event["jsonrpc"] == "2.0"
+    assert event["id"] == request_id
+    assert event["result"]["kind"] == "message"
+    assert "601318.SH" in event["result"]["parts"][0]["text"]

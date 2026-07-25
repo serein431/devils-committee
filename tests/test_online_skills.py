@@ -1,5 +1,6 @@
 import asyncio
 
+from backend.skills import online as online_module
 from backend.research_request import ResearchRequest
 from backend.skills.contracts import (
     DatasetArtifact,
@@ -219,3 +220,50 @@ def test_report_to_result_uses_findings_limitations_and_deduped_hashes():
     assert result.findings[0].evidence_refs == ["600519.SH", "20240102"]
     assert result.metrics == {"rows": 2}
     assert result.warnings == ["dividend field incomplete"]
+
+
+def test_index_rows_do_not_invent_a_missing_announcement_date(monkeypatch):
+    records = {
+        "index_weights": [{"date": "20240102", "weight": 0.1}],
+        "daily": [
+            {"trade_date": "20240101", "close": 100.0, "volume": 1000.0},
+            {"trade_date": "20240102", "close": 101.0, "volume": 1100.0},
+            {"trade_date": "20240103", "close": 102.0, "volume": 1200.0},
+        ],
+        "index_daily": [
+            {"trade_date": "20240101", "close": 200.0},
+            {"trade_date": "20240102", "close": 201.0},
+            {"trade_date": "20240103", "close": 202.0},
+        ],
+    }
+    monkeypatch.setattr(
+        online_module,
+        "_read_records",
+        lambda bundle, name: records[name],
+    )
+
+    rows, warning = online_module._event_rows(_request(), _bundle())
+
+    assert rows
+    assert all(row["announcement_date"] == "" for row in rows)
+    assert all(row["effective_date"] == "2024-01-02" for row in rows)
+    assert "announcement_date unavailable" in warning
+
+
+def test_index_event_missing_announcement_cannot_be_published_as_success(monkeypatch):
+    runner = OnlineSkillRunner()
+    monkeypatch.setattr(
+        online_module,
+        "_event_rows",
+        lambda request, bundle: ([{"event_id": "event-1"}], "announcement_date unavailable"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_invoke",
+        lambda *args: ({"status": "pass", "findings": []}, 1),
+    )
+
+    result = runner.run_index_event(_request(), _bundle())
+
+    assert result.status == "insufficient-evidence"
+    assert "announcement_date unavailable" in result.warnings

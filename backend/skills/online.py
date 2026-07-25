@@ -88,15 +88,8 @@ def report_to_result(
     dataset_hashes: list[str],
     assumptions: list[str] | None = None,
     forced_warning: str = "",
-    advisory_warning: str = "",
 ) -> SkillResult:
-    """Convert a QuantSkills report without turning missing evidence into success.
-
-    ``forced_warning`` marks evidence that is genuinely missing, so the result is
-    downgraded to insufficient-evidence. ``advisory_warning`` is a caveat about an
-    otherwise-complete analysis (e.g. a fallback field) — it is surfaced to the
-    reader but does not overturn the skill's own status.
-    """
+    """Convert a QuantSkills report without turning missing evidence into success."""
     raw_status = report.get("status")
     if raw_status == "insufficient-evidence" or forced_warning:
         status = "insufficient-evidence"
@@ -128,8 +121,6 @@ def report_to_result(
     warnings = [str(item) for item in report.get("limitations", []) or []]
     if forced_warning:
         warnings.append(forced_warning)
-    if advisory_warning:
-        warnings.append(advisory_warning)
     metrics = report.get("metrics") or report.get("input_summary") or {}
     return SkillResult(
         skill_id=skill_id,
@@ -521,10 +512,9 @@ def _event_rows(
         if raw_action not in {"add", "delete", "weight_change"}:
             raw_action = "weight_change"
         effective_iso = _iso_date(effective_date)
-        # Fall back to the effective date when no announcement is published;
-        # the skill only requires announcement <= effective, and equal dates
-        # satisfy that without inventing an earlier timestamp.
-        announcement_iso = _iso_date(announcement_date) or effective_iso
+        # Keep a missing announcement date empty. The effective date is a
+        # different fact and must not be presented as an official announcement.
+        announcement_iso = _iso_date(announcement_date)
         for offset in range(-5, 6):
             date_index = event_index + offset
             if not 0 <= date_index < len(trading_dates):
@@ -604,7 +594,6 @@ class OnlineSkillRunner:
         columns: list[str],
         assumptions: list[str] | None = None,
         forced_warning: str = "",
-        advisory_warning: str = "",
     ) -> SkillResult:
         if not rows:
             return SkillResult(
@@ -628,7 +617,6 @@ class OnlineSkillRunner:
             bundle.dataset_hashes,
             assumptions=assumptions,
             forced_warning=forced_warning,
-            advisory_warning=advisory_warning,
         )
 
     def run_adjustments(
@@ -686,17 +674,12 @@ class OnlineSkillRunner:
         self, request: ResearchRequest, bundle: MarketDataBundle
     ) -> SkillResult:
         rows, warning = _event_rows(request, bundle)
-        # A missing announcement date is a provenance caveat, not missing
-        # evidence: the event study still runs on effective-date windows. Pass
-        # it as an advisory so a completed analysis is not blanked to
-        # insufficient-evidence. Genuinely empty input still downgrades via the
-        # no-rows branch in _run.
         return self._run(
             "skill-index-rebalance-event-study",
             bundle,
             rows,
             EVENT_COLUMNS,
-            advisory_warning=warning,
+            forced_warning=warning,
         )
 
     async def run_all(

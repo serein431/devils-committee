@@ -174,6 +174,20 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
 
     # Second advertised skill on the Agent Card — must actually work when called.
     if skill == "audit_claims":
+        if jsonrpc and wants_stream:
+            async def audit_stream():
+                try:
+                    result = await DebateOrchestrator().audit_claims(research_request)
+                    yield _sse(_jsonrpc_result(request_id, _legacy_agent_message(result)))
+                except Exception:
+                    log.exception("JSON-RPC audit stream failed")
+                    yield _sse(_jsonrpc_error(request_id, -32603, "internal error"))
+
+            return StreamingResponse(
+                audit_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
         try:
             result = await DebateOrchestrator().audit_claims(research_request)
         except Exception:
