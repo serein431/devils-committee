@@ -23,14 +23,14 @@
 
 台词建议：
 
-> 每个真实请求会运行四个在线 QuantSkills：公司行动复权、股票池存活、流动性压力和指数调整事件。另外两个 Skill 读取因子筛选与 HPO 的预计算报告。
+> 每个真实请求会运行 QuantSkills，并执行项目自己的指数权重变化日研究。该研究只使用 PandaAI 的权重记录日期，不把它写成公告时间。
 
 六个提交用 Skill ID：
 
 - `corporate-action-adjustment-auditor`
 - `survivorship-universe-auditor`
 - `portfolio-liquidity-stress-test`
-- `index-rebalance-event-study`
+- `project-index-weight-change-study`
 - `factor-ranking-sage`
 - `model-hpo-evidence-driven`
 
@@ -62,7 +62,7 @@
 2. 页面失败：切终端演示同一后端，不把录屏说成实时结果。
 3. PandaData 或在线 Skill 失败：展示错误或 `insufficient-evidence`，不要改成 mock 后称为真实运行。
 4. 评委给出非 A 股标的：说明当前真实研究范围只含 A 股，并改用三个固定示例之一。
-5. 预计算报告缺失或哈希不符：说明两个预计算 Skill 没有可用证据，不宣称审计通过。
+5. 预计算报告缺失或哈希不符：说明 HPO 或因子回退报告没有可用证据，不宣称审计通过。
 
 ## 人工事项
 

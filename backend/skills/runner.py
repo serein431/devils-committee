@@ -18,7 +18,7 @@ MOCK_SKILL_IDS = [
     "skill-corporate-action-adjustment-auditor",
     "skill-survivorship-universe-auditor",
     "skill-portfolio-liquidity-stress-test",
-    "skill-index-rebalance-event-study",
+    "project-index-weight-change-study",
     "skill-factor-ranking-sage",
     "skill-model-hpo-evidence-driven",
 ]
@@ -36,8 +36,8 @@ def build_mock_results(bundle: MarketDataBundle) -> dict[str, SkillResult]:
         "skill-portfolio-liquidity-stress-test": [
             SkillFinding("mock liquidity estimate", ["daily"], 0.5)
         ],
-        "skill-index-rebalance-event-study": [
-            SkillFinding("mock index event estimate", ["daily"], 0.5)
+        "project-index-weight-change-study": [
+            SkillFinding("mock index weight-change estimate", ["daily"], 0.5)
         ],
         "skill-factor-ranking-sage": [
             SkillFinding("mock factor ranking", ["daily"], 0.5)

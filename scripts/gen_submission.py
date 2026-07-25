@@ -24,7 +24,7 @@ SKILL_IDS = [
     "corporate-action-adjustment-auditor",
     "survivorship-universe-auditor",
     "portfolio-liquidity-stress-test",
-    "index-rebalance-event-study",
+    "project-index-weight-change-study",
     "factor-ranking-sage",
     "model-hpo-evidence-driven",
 ]
@@ -92,9 +92,9 @@ def main() -> None:
     add("- LLM 通过 Volcengine Ark 调用，对外显示名称是 **DeepSeek V4 Pro**；`LLM_MODEL` 填活动提供的 Endpoint ID。")
     add("- 真实数据由 PandaData 提供，QuantSkills 读取研究所需的历史数据。")
     add("- 当前真实研究只支持 A 股。港股或其他境外市场请求返回 `insufficient-evidence`，不会改用 mock。")
-    add("- 真实请求每次运行四个在线 QuantSkills，另外两个读取与当前构建和数据哈希相符的预计算报告。")
+    add("- 真实请求每次运行四个在线 QuantSkills、一个项目内指数权重变化研究，并读取 HPO 预计算报告；在线因子研究失败时可读取经过哈希核验的预计算报告。")
     add("")
-    add("## 4. 六个 Skill ID")
+    add("## 4. 六项研究能力 ID")
     add("**每次在线运行的四个：**")
     for skill_id in ONLINE_SKILLS:
         add(f"- `{skill_id}`")

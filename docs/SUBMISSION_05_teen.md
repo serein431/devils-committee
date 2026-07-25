@@ -9,7 +9,7 @@ Devil's Committee 不替用户作投资决定。它把多头、空头、宏观�
 ## 当前可核验内容
 
 - 默认 mock 环境可在本地运行页面、A2A 和 SSE。
-- 真实研究设计为 A 股范围，使用 PandaData、四个在线 QuantSkills 和两个预计算结果。
+- 真实研究支持 A 股，使用 PandaData、四个在线 QuantSkills、一个项目内指数权重变化研究和 HPO 预计算结果。
 - 固定示例为 `600519.SH`、`300750.SZ`、`601318.SH`。
 - 所有公开文本禁止买卖指令、目标价和收益承诺，也不执行自动交易。
 
@@ -18,7 +18,7 @@ Devil's Committee 不替用户作投资决定。它把多头、空头、宏观�
 ## 技术说明
 
 - LLM 通过 Volcengine Ark 调用，显示名称是 DeepSeek V4 Pro；`LLM_MODEL` 填活动 Endpoint ID。
-- 真实数据来自 PandaData。每个真实请求在线运行 `corporate-action-adjustment-auditor`、`survivorship-universe-auditor`、`portfolio-liquidity-stress-test`、`index-rebalance-event-study`。
+- 真实数据来自 PandaData。每个真实请求在线运行三个审计 QuantSkills，并执行项目内的 `project-index-weight-change-study`。
 - `factor-ranking-sage` 和 `model-hpo-evidence-driven` 读取预计算报告。
 - 在线 Skill 与单个 Agent 限制 120 秒，整个请求限制 600 秒。
 - 来源分为 `live`、内容哈希核验后的 `cache`、`precomputed`、`mock`；缺少证据用 `insufficient-evidence`。真实失败不改成 mock。

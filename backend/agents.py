@@ -23,10 +23,10 @@ ROLE_SKILLS = {
     ],
     "bear": [
         "skill-portfolio-liquidity-stress-test",
-        "skill-index-rebalance-event-study",
+        "project-index-weight-change-study",
     ],
     "macro": [
-        "skill-index-rebalance-event-study",
+        "project-index-weight-change-study",
         "skill-factor-ranking-sage",
     ],
     "risk": [

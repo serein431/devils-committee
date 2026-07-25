@@ -23,7 +23,7 @@ git submodule update --init --recursive
   - `corporate-action-adjustment-auditor`
   - `survivorship-universe-auditor`
   - `portfolio-liquidity-stress-test`
-  - `index-rebalance-event-study`
+  - `project-index-weight-change-study`（项目内实现）
 - [ ] 两个预计算 Skill 的清单、提交号和数据哈希均通过检查：
   - `factor-ranking-sage`
   - `model-hpo-evidence-driven`

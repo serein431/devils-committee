@@ -1,6 +1,6 @@
 # 反方 · The Devil's Committee
 
-一个面向投资研究初学者的多智能体辩论工具。Bull、Bear、Macro、Risk 四个 Agent 阅读同一批证据并分别陈述，Audit Agent 检查选择偏差、公司行动复权、流动性、指数事件和模型过拟合，Chair 只汇总共识、分歧与风险范围。
+一个面向投资研究初学者的多智能体辩论工具。Bull、Bear、Macro、Risk 四个 Agent 阅读同一批证据并分别陈述，Audit Agent 检查选择偏差、公司行动复权、流动性、指数权重变化和模型过拟合，Chair 只汇总共识、分歧与风险范围。
 
 项目不给买卖指令、目标价、收益承诺，也不执行自动交易。输出仅供学习与研究。
 
@@ -10,7 +10,7 @@
 - 真实环境需要 Python 3.12、`requirements-real.txt`、Volcengine Ark Endpoint ID、PandaData 账号和 QuantSkills 仓库。
 - LLM 通过 Volcengine Ark 调用，页面和状态接口显示名称为 **DeepSeek V4 Pro**；`LLM_MODEL` 必须填写活动提供的 Endpoint ID，不是显示名称。
 - 当前真实研究只支持 A 股。港股或其他境外市场会返回 `insufficient-evidence`，不会用 mock 补成结果。
-- 每个真实请求运行四个在线 QuantSkills；另外两个读取与当前构建和数据哈希相符的预计算报告。
+- 每个真实请求运行四个在线 QuantSkills 和一个项目内的指数权重变化研究，并读取 HPO 预计算结果；在线因子研究失败时可读取经过哈希核验的预计算报告。
 - 公网服务已部署到 `https://devils.corvusapi.org`，提供 A2A v1 JSON-RPC、Task 查询和 SSE 状态事件。
 
 ## 默认开发：离线 mock
@@ -52,17 +52,17 @@ git submodule update --init --recursive
 
 真实研究使用 PandaData 历史数据。缓存键由请求方法、参数、SDK 版本和数据版本计算；Parquet 文件另存 SHA-256。读取缓存时会重新核验哈希。
 
-## 六个 QuantSkills
+## 六项研究能力
 
-提交材料使用下面六个 Skill ID。本地克隆目录和当前运行时 JSON 会在 ID 前加 `skill-`。
+提交材料使用下面六个能力 ID。五项来自 QuantSkills，一项由本项目实现。
 
 | Skill ID | 真实请求中的方式 | 主要用途 |
 |---|---|---|
 | `corporate-action-adjustment-auditor` | 每次在线运行 | 检查复权与现金分红数据 |
 | `survivorship-universe-auditor` | 每次在线运行 | 检查股票池与退市证据 |
 | `portfolio-liquidity-stress-test` | 每次在线运行 | 估算流动性压力 |
-| `index-rebalance-event-study` | 每次在线运行 | 研究指数调整事件窗口 |
-| `factor-ranking-sage` | 读取预计算报告 | 因子筛选与验证 |
+| `project-index-weight-change-study` | 每次在线运行 | 使用 PandaAI 权重记录日期研究前后收益与成交量 |
+| `factor-ranking-sage` | 在线运行，失败时读取预计算报告 | 因子筛选与验证 |
 | `model-hpo-evidence-driven` | 读取预计算报告 | 参数搜索与过拟合证据 |
 
 ## 来源和状态
@@ -82,7 +82,8 @@ A2A 请求
   └─ 研究请求解析：只接受当前支持的 A 股代码
       └─ PandaData：live 或经哈希核验的 cache
           ├─ 四个在线 QuantSkills（每个最多 120 秒）
-          └─ 两个 precomputed 报告
+          ├─ 项目内指数权重变化研究
+          └─ HPO precomputed 报告（因子研究可在失败时读取预计算报告）
               └─ Bull / Bear / Macro / Risk 并行陈述（单个 Agent 最多 120 秒）
                   └─ Audit 独立检查
                       └─ Chair 汇总
@@ -94,7 +95,7 @@ A2A 请求
 ## 三个固定研究示例
 
 - `600519.SH`：复权、分红、因子和流动性风险。
-- `300750.SZ`：成长因子、波动、流动性和指数事件。
+- `300750.SZ`：成长因子、波动、流动性和指数权重变化。
 - `601318.SH`：分红、股票池和风险证据。
 
 示例文件位于 `tests/examples/`。审计结论取决于实际数据、缓存和预计算报告，文档不预写“必定通过”或“必定标记”。

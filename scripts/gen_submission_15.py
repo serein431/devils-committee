@@ -20,7 +20,7 @@ SKILL_IDS = [
     "corporate-action-adjustment-auditor",
     "survivorship-universe-auditor",
     "portfolio-liquidity-stress-test",
-    "index-rebalance-event-study",
+    "project-index-weight-change-study",
     "factor-ranking-sage",
     "model-hpo-evidence-driven",
 ]
@@ -54,10 +54,10 @@ def main() -> None:
     add("## 3. 技术资源")
     add("- 模型：Volcengine Ark 上显示为 **DeepSeek V4 Pro**；`LLM_MODEL` 填活动 Endpoint ID。")
     add("- 数据：PandaData 历史数据；当前真实研究只支持 A 股，其他市场返回 `insufficient-evidence`。")
-    add("- Skills：真实请求每次运行四个在线 QuantSkills，并读取两个预计算结果。每个在线 Skill 与单个 Agent 限制 120 秒，整个请求限制 600 秒。")
+    add("- 能力：真实请求每次运行四个在线 QuantSkills、一个项目内指数权重变化研究，并读取 HPO 预计算结果。在线因子研究失败时可读取经过哈希核验的预计算报告。每个在线 Skill 与单个 Agent 限制 120 秒，整个请求限制 600 秒。")
     add("- 接口：A2A、SSE、Bearer 鉴权和 Agent Card 与参评类别 18 共用同一后端。")
     add("")
-    add("六个 Skill ID：")
+    add("六项研究能力 ID：")
     for index, skill_id in enumerate(SKILL_IDS):
         kind = "在线" if index < 4 else "预计算"
         add(f"- `{skill_id}`（{kind}）")

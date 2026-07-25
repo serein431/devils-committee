@@ -19,15 +19,15 @@
 ## 3. 技术资源
 - 模型：Volcengine Ark 上显示为 **DeepSeek V4 Pro**；`LLM_MODEL` 填活动 Endpoint ID。
 - 数据：PandaData 历史数据；当前真实研究只支持 A 股，其他市场返回 `insufficient-evidence`。
-- Skills：真实请求每次运行四个在线 QuantSkills，并读取两个预计算结果。每个在线 Skill 与单个 Agent 限制 120 秒，整个请求限制 600 秒。
+- 能力：真实请求每次运行四个在线 QuantSkills、一个项目内指数权重变化研究，并读取 HPO 预计算结果。在线因子研究失败时可读取经过哈希核验的预计算报告。每个在线 Skill 与单个 Agent 限制 120 秒，整个请求限制 600 秒。
 - 接口：A2A、SSE、Bearer 鉴权和 Agent Card 与参评类别 18 共用同一后端。
 
-六个 Skill ID：
+六项研究能力 ID：
 - `corporate-action-adjustment-auditor`（在线）
 - `survivorship-universe-auditor`（在线）
 - `portfolio-liquidity-stress-test`（在线）
-- `index-rebalance-event-study`（在线）
-- `factor-ranking-sage`（预计算）
+- `project-index-weight-change-study`（在线，项目内实现）
+- `factor-ranking-sage`（在线，失败时读取预计算）
 - `model-hpo-evidence-driven`（预计算）
 
 ## 4. 来源和失败处理

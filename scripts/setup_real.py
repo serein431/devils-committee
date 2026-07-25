@@ -25,7 +25,6 @@ REPOS = (
     "skill-corporate-action-adjustment-auditor",
     "skill-survivorship-universe-auditor",
     "skill-portfolio-liquidity-stress-test",
-    "skill-index-rebalance-event-study",
     "skill-factor-ranking-sage",
     "skill-model-hpo-evidence-driven",
 )
@@ -140,7 +139,7 @@ def _checks(env: dict[str, str]) -> dict[str, bool]:
         "panda_credentials": all(
             env.get(key) for key in ("DEFAULT_USERNAME", "DEFAULT_PASSWORD")
         ),
-        "seven_skill_repositories": all(
+        "required_skill_repositories": all(
             _repository_ready(skill_root / name)
             for name in REPOS
         ),

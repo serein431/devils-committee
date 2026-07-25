@@ -19,7 +19,7 @@ RUN_LIVE_INTEGRATION=1 .venv-real/bin/python -m pytest tests/test_live_integrati
 
 复制 `.env.example` 后，人工把有效的 `LLM_API_KEY`、`LLM_MODEL`、`DEFAULT_USERNAME` 和 `DEFAULT_PASSWORD` 写入 `.env`。如 A2A 服务启用了鉴权，还需填写 `A2A_BEARER_TOKEN`。凭证只能留在本机 `.env`、密码管理器或部署环境的密钥配置中，不要把值写进文档、命令参数、终端历史、测试输出或 Git 提交。
 
-`scripts/setup_real.py --check` 只报告项目是否齐全，不会探测公开接口，也不会打印凭证、HTTP 请求头、响应正文或本地路径。检查内容包括 Python 3.12、模型 endpoint ID、PandaData 账号和密码、七个 QuantSkills 仓库、两个预计算清单以及数值配置。
+`scripts/setup_real.py --check` 只报告项目是否齐全，不会探测公开接口，也不会打印凭证、HTTP 请求头、响应正文或本地路径。检查内容包括 Python 3.12、模型 endpoint ID、PandaData 账号和密码、六个 QuantSkills 仓库、预计算清单以及数值配置。
 
 ## 结果含义
 
@@ -28,7 +28,7 @@ RUN_LIVE_INTEGRATION=1 .venv-real/bin/python -m pytest tests/test_live_integrati
 - `precomputed`：因子筛选或 HPO 结果来自当前构建可验证的预计算文件。
 - `insufficient-evidence`：真实来源缺少所需字段或记录，当前 Skill 不能给出完整结果。这不是通过，也不应改写成成功。
 
-真实模式下如果 PandaData、模型或 QuantSkills 失败，程序会返回错误或证据不足，不会改用 `mock`。因此真实测试允许个别 Skill 为 `insufficient-evidence`，但不允许出现 `mock`；六个 Skill ID 必须全部存在。
+真实模式下如果 PandaData、模型或研究能力失败，程序会返回错误或证据不足，不会改用 `mock`。因此真实测试允许个别结果为 `insufficient-evidence`，但不允许出现 `mock`；六项研究能力 ID 必须全部存在。
 
 ## 缓存预热
 
@@ -52,6 +52,6 @@ DATA_MODE=panda .venv-real/bin/python scripts/warm_cache.py
 
 脚本会读取进程环境中的 `A2A_BEARER_TOKEN`。不要使用 `--token` 直接跟真实值；这会让值进入终端历史和进程参数。需要鉴权时，应由密码管理器、部署服务或当前会话已有的私密环境变量提供。
 
-三个请求的记录只写入 `var/live-records/<symbol>/`，每个目录含 `request.json`、`response.json`、`skills.json` 和 `README.md`。写入前会递归清除鉴权、Cookie、模型密钥、PandaData 账号和密码。`README.md` 只保存 UTC 时间、服务主机名、总耗时、数据模式和六个 Skill 状态，不保存 URL 路径、查询参数、请求头或凭证。
+三个请求的记录只写入 `var/live-records/<symbol>/`，每个目录含 `request.json`、`response.json`、`skills.json` 和 `README.md`。写入前会递归清除鉴权、Cookie、模型密钥、PandaData 账号和密码。`README.md` 只保存 UTC 时间、服务主机名、总耗时、数据模式和六项研究能力状态，不保存 URL 路径、查询参数、请求头或凭证。
 
 `var/live-records/` 已被 Git 忽略。不要强制加入这些真实记录，也不要把它们复制到参赛文档或公开 issue 中。

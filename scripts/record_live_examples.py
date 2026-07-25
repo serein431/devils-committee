@@ -20,14 +20,14 @@ RECORDS_ROOT = REPO_ROOT / "var" / "live-records"
 REQUEST_TIMEOUT = 610.0
 SYMBOL_TOPICS = {
     "600519.SH": "研究 600519.SH 的复权、分红、因子和流动性风险",
-    "300750.SZ": "研究 300750.SZ 的成长因子、波动、流动性和指数事件",
+    "300750.SZ": "研究 300750.SZ 的成长因子、波动、流动性和指数权重变化",
     "601318.SH": "研究 601318.SH 的分红、股票池和风险证据",
 }
 SKILL_IDS = (
     "skill-corporate-action-adjustment-auditor",
     "skill-survivorship-universe-auditor",
     "skill-portfolio-liquidity-stress-test",
-    "skill-index-rebalance-event-study",
+    "project-index-weight-change-study",
     "skill-factor-ranking-sage",
     "skill-model-hpo-evidence-driven",
 )

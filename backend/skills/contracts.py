@@ -112,9 +112,9 @@ def liquidity_stress(symbol: str, adv_ratio: float, days_to_liquidate: float,
 
 def event_study(symbol: str, event: str, car_bps: float, window: str,
                 n_events: int) -> dict[str, Any]:
-    """skill-index-rebalance-event-study."""
+    """Project-owned index weight-change study."""
     return {
-        "skill": "skill-index-rebalance-event-study",
+        "skill": "project-index-weight-change-study",
         "symbol": symbol,
         "event": event,
         "car_bps": car_bps,              # cumulative abnormal return

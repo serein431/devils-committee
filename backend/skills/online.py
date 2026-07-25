@@ -1,4 +1,4 @@
-"""Adapters for the four QuantSkills that run for every research request."""
+"""Adapters for online QuantSkills and the project-owned weight-change study."""
 
 from __future__ import annotations
 
@@ -36,10 +36,6 @@ ONLINE_SKILLS: dict[str, tuple[str, list[str]]] = {
             "0.5",
         ],
     ),
-    "skill-index-rebalance-event-study": (
-        "study_index_rebalance.py",
-        ["--start", "-5", "--end", "5"],
-    ),
 }
 
 _GENERIC_FINDING_IMPACT = (
@@ -70,19 +66,7 @@ LIQUIDITY_COLUMNS = [
     "spread_bps",
     "volatility",
 ]
-EVENT_COLUMNS = [
-    "event_id",
-    "symbol",
-    "action",
-    "announcement_date",
-    "effective_date",
-    "relative_day",
-    "return",
-    "benchmark_return",
-    "volume_ratio",
-    "weight_before",
-    "weight_after",
-]
+INDEX_WEIGHT_STUDY_ID = "project-index-weight-change-study"
 FACTOR_SKILL_ID = "skill-factor-ranking-sage"
 FACTOR_FEATURES = [
     "open",
@@ -585,48 +569,53 @@ def _event_rows(
         )
         for row in stock
     }
+    positive_volumes = [value for value in stock_volume.values() if value > 0]
+    average_volume = (
+        sum(positive_volumes) / len(positive_volumes)
+        if positive_volumes
+        else 0.0
+    )
     event_rows: list[dict[str, Any]] = []
     ordered_weights = sorted(
         weights,
         key=lambda row: str(_first(row, "date", "effective_date", "trade_date")),
     )
-    previous_weight = 0.0
+    previous_weight: float | None = None
     event_count = 0
     trading_dates = _dates(stock)
-    announcement_incomplete = False
+    skipped_dates = 0
     for row in ordered_weights:
-        effective_date = _date_key(
+        weight_date = _date_key(
             _first(row, "effective_date", "date", "trade_date")
         )
-        before = _number(_first(row, "weight_before"), previous_weight)
         current_weight = _number(
             _first(row, "weight_after", "weight", "index_weight")
         )
-        if not effective_date or current_weight == before:
+        explicit_before = _first(row, "weight_before", default=None)
+        if previous_weight is None and explicit_before is None:
+            previous_weight = current_weight
+            continue
+        before = _number(explicit_before, previous_weight or 0.0)
+        if not weight_date or math.isclose(current_weight, before, abs_tol=1e-12):
             previous_weight = current_weight
             continue
         event_count += 1
         event_id = str(_first(row, "event_id", default=f"event-{event_count}"))
         try:
-            event_index = trading_dates.index(effective_date)
+            event_index = trading_dates.index(weight_date)
         except ValueError:
+            skipped_dates += 1
             previous_weight = current_weight
             continue
-        announcement_date = _date_key(_first(row, "announcement_date"))
-        if not announcement_date:
-            announcement_incomplete = True
-        # The event-study skill demands YYYY-MM-DD dates, one of its three
-        # actions {add, delete, weight_change}, and announcement <= effective.
-        # PandaData index weights carry none of these directly, so translate a
-        # weight delta into the skill's vocabulary instead of feeding it
-        # unsupported_action / invalid_event_date rows.
         raw_action = str(_first(row, "action", "change_type", default="")).strip()
         if raw_action not in {"add", "delete", "weight_change"}:
-            raw_action = "weight_change"
-        effective_iso = _iso_date(effective_date)
-        # Keep a missing announcement date empty. The effective date is a
-        # different fact and must not be presented as an official announcement.
-        announcement_iso = _iso_date(announcement_date)
+            if before == 0 and current_weight > 0:
+                raw_action = "add"
+            elif before > 0 and current_weight == 0:
+                raw_action = "delete"
+            else:
+                raw_action = "weight_change"
+        weight_iso = _iso_date(weight_date)
         for offset in range(-5, 6):
             date_index = event_index + offset
             if not 0 <= date_index < len(trading_dates):
@@ -638,8 +627,6 @@ def _event_rows(
             # (invalid_numeric) and sinks an otherwise usable event study.
             if date not in stock_returns or date not in benchmark_returns:
                 continue
-            baseline = [value for value in stock_volume.values() if value > 0]
-            average_volume = sum(baseline) / len(baseline) if baseline else 0.0
             volume_ratio = (
                 stock_volume.get(date, 0.0) / average_volume
                 if average_volume > 0
@@ -650,8 +637,7 @@ def _event_rows(
                     "event_id": event_id,
                     "symbol": request.symbol,
                     "action": raw_action,
-                    "announcement_date": announcement_iso,
-                    "effective_date": effective_iso,
+                    "weight_date": weight_iso,
                     "relative_day": offset,
                     "return": stock_returns[date],
                     "benchmark_return": benchmark_returns[date],
@@ -661,12 +647,91 @@ def _event_rows(
                 }
             )
         previous_weight = current_weight
-    warning = (
-        "announcement_date unavailable; event timing incomplete"
-        if announcement_incomplete
-        else ""
-    )
+    warning = "部分权重记录日期不是股票交易日" if skipped_dates else ""
     return event_rows, warning
+
+
+def _weight_change_result(
+    bundle: MarketDataBundle,
+    rows: list[dict[str, Any]],
+    duration_ms: int,
+    warning: str = "",
+) -> SkillResult:
+    if not rows:
+        return SkillResult(
+            skill_id=INDEX_WEIGHT_STUDY_ID,
+            mode=bundle.mode,
+            status="insufficient-evidence",
+            duration_ms=duration_ms,
+            dataset_hashes=bundle.dataset_hashes,
+            warnings=[
+                warning
+                or "请求区间内没有观察到指数权重变化"
+            ],
+        )
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["event_id"]), []).append(row)
+
+    findings: list[SkillFinding] = []
+    event_cars: list[float] = []
+    event_volume_ratios: list[float] = []
+    for event_rows in grouped.values():
+        first = event_rows[0]
+        car = sum(
+            _number(row.get("return")) - _number(row.get("benchmark_return"))
+            for row in event_rows
+        )
+        volume_ratios = [_number(row.get("volume_ratio")) for row in event_rows]
+        mean_volume_ratio = sum(volume_ratios) / len(volume_ratios)
+        event_cars.append(car)
+        event_volume_ratios.append(mean_volume_ratio)
+        findings.append(
+            SkillFinding(
+                (
+                    f"{first['weight_date']} 观察到指数权重从 "
+                    f"{_number(first['weight_before']):.5f} 变为 "
+                    f"{_number(first['weight_after']):.5f}；前后 5 个交易日累计超额收益 "
+                    f"{car:.4%}，平均成交量比 {mean_volume_ratio:.2f}"
+                ),
+                ["index_weights", "daily", "index_daily", str(first["weight_date"])],
+                0.8,
+            )
+        )
+
+    hashes = [
+        bundle.datasets[name].sha256
+        for name in ("index_weights", "daily", "index_daily")
+        if name in bundle.datasets
+    ]
+    warnings = [
+        "PandaAI 未提供官方公告日期；本项只研究观察到的指数权重变化日期。"
+    ]
+    if warning:
+        warnings.append(warning)
+    return SkillResult(
+        skill_id=INDEX_WEIGHT_STUDY_ID,
+        mode=bundle.mode,
+        status="success",
+        duration_ms=duration_ms,
+        dataset_hashes=sorted(set(hashes)),
+        outcome="pass",
+        assumptions=[
+            "event_anchor=index_weight_observation_date",
+            "abnormal_return=stock_return-index_return",
+            "event_window=-5..+5 trading days",
+        ],
+        metrics={
+            "event_anchor": "index_weight_observation_date",
+            "event_count": len(grouped),
+            "observation_count": len(rows),
+            "mean_cumulative_abnormal_return": sum(event_cars) / len(event_cars),
+            "mean_volume_ratio": sum(event_volume_ratios) / len(event_volume_ratios),
+        },
+        findings=findings,
+        warnings=warnings,
+    )
 
 
 def _factor_inputs(
@@ -870,30 +935,20 @@ class OnlineSkillRunner:
     def run_index_event(
         self, request: ResearchRequest, bundle: MarketDataBundle
     ) -> SkillResult:
-        rows, warning = _event_rows(request, bundle)
-        # get_index_weights does not carry an official announcement date for
-        # every row. The QuantSkill validator requires both dates, so omit
-        # incomplete events instead of sending empty strings and producing a
-        # misleading invalid_event_date report.
-        valid_rows = [
-            row
-            for row in rows
-            if _iso_date(row.get("announcement_date"))
-            and _iso_date(row.get("effective_date"))
-            and _iso_date(row.get("announcement_date"))
-            <= _iso_date(row.get("effective_date"))
-        ]
-        if len(valid_rows) != len(rows):
-            # Keep one stable public warning. The detail that rows were
-            # filtered is implicit in the insufficient-evidence result and
-            # does not need to be concatenated into a second phrase.
-            warning = warning or "announcement_date unavailable"
-        return self._run(
-            "skill-index-rebalance-event-study",
+        missing = missing_input_result(
+            INDEX_WEIGHT_STUDY_ID,
             bundle,
-            valid_rows,
-            EVENT_COLUMNS,
-            forced_warning=warning,
+            ["index_weights", "daily", "index_daily"],
+        )
+        if missing is not None:
+            return missing
+        started = time.monotonic()
+        rows, warning = _event_rows(request, bundle)
+        return _weight_change_result(
+            bundle,
+            rows,
+            round((time.monotonic() - started) * 1000),
+            warning,
         )
 
     def run_factor_ranking(
@@ -1026,7 +1081,7 @@ class OnlineSkillRunner:
                 self.run_liquidity,
             ),
             (
-                "skill-index-rebalance-event-study",
+                INDEX_WEIGHT_STUDY_ID,
                 self.run_index_event,
             ),
             (FACTOR_SKILL_ID, self.run_factor_ranking),

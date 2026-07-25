@@ -1,6 +1,6 @@
 # 系统架构 · AI 投资辩论庭
 
-同一后端提供教练页面和 A2A 调用。默认开发使用 mock；真实环境使用 Volcengine Ark、PandaData、四个在线 QuantSkills 和两个预计算报告。
+同一后端提供教练页面和 A2A 调用。默认开发使用 mock；真实环境使用 Volcengine Ark、PandaData、四个在线 QuantSkills、一个项目内指数权重变化研究和 HPO 预计算报告。
 
 ## 请求路径
 
@@ -19,7 +19,8 @@
          └─ cache：内容哈希核验通过的本地数据
          │
          ├─ 四个在线 QuantSkills（每个最多 120 秒）
-         └─ 两个 precomputed 报告
+         ├─ 项目内指数权重变化研究
+         └─ HPO precomputed 报告（在线因子失败时可读取预计算报告）
          │
          ▼
   Bull / Bear / Macro / Risk 并行陈述（单个 Agent 最多 120 秒）
@@ -35,14 +36,14 @@
 
 整个请求限制为 600 秒。长研究使用 Task；SSE 先发送提交状态，再发送工作状态、结果 artifact 和终态。任务可通过 `GetTask` 查询，未结束任务可通过 `CancelTask` 取消。
 
-## 六个 Skill
+## 六项研究能力
 
 真实请求每次在线运行：
 
 1. `corporate-action-adjustment-auditor`
 2. `survivorship-universe-auditor`
 3. `portfolio-liquidity-stress-test`
-4. `index-rebalance-event-study`
+4. `project-index-weight-change-study`（项目内实现，只使用 PandaAI 权重记录日期，不假定公告时间）
 
 读取预计算结果：
 

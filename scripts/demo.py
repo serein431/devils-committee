@@ -7,7 +7,7 @@
 
 跑法（在 devils-committee/ 下）：
   .venv/bin/python scripts/demo.py                      # 默认标的，真机跑
-  .venv/bin/python scripts/demo.py "300750.SZ 成长因子、波动、流动性和指数事件" --pace 0.6
+  .venv/bin/python scripts/demo.py "300750.SZ 成长因子、波动、流动性和指数权重变化" --pace 0.6
   .venv/bin/python scripts/demo.py "601318.SH 分红、股票池和风险证据"
 
 它调 backend.orchestration，因此 LLM/DATA/SKILL 的 mock↔real 由 .env 决定，无需改这里。

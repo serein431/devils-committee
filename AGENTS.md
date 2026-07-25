@@ -33,7 +33,7 @@ Python 使用 4 空格、类型注解和 `snake_case`；类名用 `PascalCase`�
 
 ## Runtime Facts
 
-Volcengine Ark 的显示名称是 DeepSeek V4 Pro，`LLM_MODEL` 接收活动 Endpoint ID。真实研究只支持 A 股；其他市场返回 `insufficient-evidence`。每次真实请求运行四个在线 QuantSkills，并读取两个预计算结果。来源必须区分 `live`、`cache`、`precomputed`、`mock`；缺少证据时使用 `insufficient-evidence`，真实失败不得改成 mock。
+Volcengine Ark 的显示名称是 DeepSeek V4 Pro，`LLM_MODEL` 接收活动 Endpoint ID。真实研究只支持 A 股；其他市场返回 `insufficient-evidence`。每次真实请求运行四个在线 QuantSkills、一个项目内的指数权重变化研究，并读取 HPO 预计算结果；在线因子研究失败时可以读取可验证的预计算报告。来源必须区分 `live`、`cache`、`precomputed`、`mock`；缺少证据时使用 `insufficient-evidence`，真实失败不得改成 mock。
 
 ## Commits, PRs, and Security
 

@@ -4,6 +4,8 @@
 
 状态：已确认范围，等待书面方案审阅
 
+更新说明（2026-07-26）：PandaAI 权重接口不提供官方公告时间，因此原 `skill-index-rebalance-event-study` 已替换为项目内的 `project-index-weight-change-study`。它只研究权重记录日期前后的收益和成交量，不推断公告影响。
+
 项目：Devil's Committee
 
 ## 1. 背景
@@ -18,7 +20,7 @@
 
 - 使用火山方舟 OpenAI 兼容接口调用官方 DeepSeek V4 Pro Endpoint。
 - 使用 `panda_data==0.0.12` 获取真实 A 股行情、复权、分红、指数成分和因子数据。
-- 接入四个在线 QuantSkills 和两个预计算 QuantSkills。
+- 接入四个在线 QuantSkills、一个项目内指数权重变化研究和 HPO 预计算结果；因子研究保留预计算回退。
 - 每条结论都能追溯到数据集、Skill 结果和运行状态。
 - 真实模式失败时明确返回证据不足，不用模拟结果冒充真实结果。
 - 准备三个可重复执行的 A 股示例任务。
@@ -38,7 +40,7 @@
 依赖分为两组：
 
 - `requirements.txt`：FastAPI、HTTP 客户端和离线测试所需基础依赖。
-- `requirements-real.txt`：引用基础依赖，并固定 `panda_data==0.0.12`、DuckDB、PyArrow、Pandas、NumPy 兼容版本及六个 QuantSkills 的运行依赖。
+- `requirements-real.txt`：引用基础依赖，并固定 `panda_data==0.0.12`、DuckDB、PyArrow、Pandas、NumPy 兼容版本及所需 QuantSkills 的运行依赖。
 
 真实配置继续从被 Git 忽略的 `.env` 读取：
 
@@ -67,8 +69,8 @@ QUANTSKILLS_DIR=./vendor/quantskills
 
 1. 请求解析器识别 A 股代码、问题、日期范围和可选的组合参数。
 2. 数据模块构建一份 `MarketDataBundle`，优先读取真实缓存，缺失时请求 PandaData。
-3. 四个在线 QuantSkills 并行读取同一数据包，返回统一 `SkillResult`。
-4. 两个预计算 QuantSkills 读取带日期、配置和文件哈希的研究报告。
+3. 四个在线 QuantSkills 与项目内指数权重变化研究并行读取同一数据包，返回统一 `SkillResult`。
+4. HPO 读取带日期、配置和文件哈希的预计算研究报告；在线因子研究失败时可读取对应预计算报告。
 5. Bull、Bear、Macro、Risk Agent 只能引用已经存在的 Skill 结果。
 6. Audit Agent 检查论据是否存在数据缺失、选择偏差、坏数据或过拟合迹象。
 7. Chair Agent 汇总共识、未解决分歧和风险边界。
@@ -128,7 +130,7 @@ QUANTSKILLS_DIR=./vendor/quantskills
 
 `status` 只允许 `success`、`insufficient-evidence` 和 `error`。`mode` 只允许 `live`、`cache`、`precomputed` 和 `mock`。
 
-## 6. 六个 QuantSkills
+## 6. 六项研究能力
 
 ### 每次请求在线执行
 
@@ -144,9 +146,9 @@ QUANTSKILLS_DIR=./vendor/quantskills
    - 输入：真实成交额、波动率和用户提供的持仓金额、价差。
    - 输出：成交天数、冲击估计和流动性警告。用户未提供的持仓金额或价差必须标为演示假设。
 
-4. `skill-index-rebalance-event-study`
-   - 输入：历史指数成分变化、股票行情和指数行情。
-   - 输出：事件窗口收益、成交量变化和数据不足说明。
+4. `project-index-weight-change-study`
+   - 输入：PandaAI 历史指数权重、股票行情和指数行情。
+   - 输出：权重记录日期前后的相对收益、成交量变化和数据不足说明。
 
 ### 提前计算，在线读取
 
@@ -172,7 +174,7 @@ QUANTSKILLS_DIR=./vendor/quantskills
 ## 8. 三个示例任务
 
 1. `600519.SH`：复权、分红、因子排名和流动性研究。
-2. `300750.SZ`：成长因子、波动、流动性和指数事件研究。
+2. `300750.SZ`：成长因子、波动、流动性和指数权重变化研究。
 3. `601318.SH`：金融行业、分红、股票池和风险研究。
 
 每个示例保存自然语言输入、结构化请求、PandaData 查询清单、Skill 运行记录、最终 A2A 输出和风险提示。真实调用记录必须删除凭证和请求头。
@@ -191,7 +193,7 @@ QUANTSKILLS_DIR=./vendor/quantskills
 
 ### 真实测试
 
-真实测试通过 `RUN_LIVE_INTEGRATION=1` 单独启用，不进入普通 CI。测试内容包括 DeepSeek 最小回复、PandaData 登录、日线查询、六个 Skill 冒烟检查和三个 A 股完整请求。
+真实测试通过 `RUN_LIVE_INTEGRATION=1` 单独启用，不进入普通 CI。测试内容包括 DeepSeek 最小回复、PandaData 登录、日线查询、六项研究能力检查和三个 A 股完整请求。
 
 上线后使用公网地址运行 `scripts/smoke_a2a.py`。Agent Card URL、服务 URL、鉴权方式和 `PUBLIC_URL` 必须一致。
 
@@ -212,7 +214,7 @@ QUANTSKILLS_DIR=./vendor/quantskills
 
 - DeepSeek V4 Pro 真实回复通过。
 - PandaData 真实日线和所需扩展数据接口通过。
-- 四个在线 Skill 和两个预计算 Skill 均有真实运行证据。
+- 四个在线 QuantSkills、项目内指数权重变化研究和预计算结果均有真实运行证据。
 - 三个 A 股示例任务可从 A2A 入口重复执行。
 - 真实模式不再把失败隐藏为模拟成功。
 - 后端、前端、合规和 A2A 测试全部通过。

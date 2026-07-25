@@ -98,7 +98,7 @@ def test_all_five_online_skills_return_one_result(monkeypatch):
         runner,
         "run_index_event",
         lambda request, bundle: _success(
-            "skill-index-rebalance-event-study", bundle
+            "project-index-weight-change-study", bundle
         ),
     )
     monkeypatch.setattr(
@@ -115,7 +115,7 @@ def test_all_five_online_skills_return_one_result(monkeypatch):
         "skill-corporate-action-adjustment-auditor",
         "skill-survivorship-universe-auditor",
         "skill-portfolio-liquidity-stress-test",
-        "skill-index-rebalance-event-study",
+        "project-index-weight-change-study",
         "skill-factor-ranking-sage",
     }
     assert all(item.dataset_hashes for item in results)
@@ -149,7 +149,7 @@ def test_timeout_only_marks_the_slow_skill(monkeypatch):
         runner,
         "run_index_event",
         lambda request, bundle: _success(
-            "skill-index-rebalance-event-study", bundle
+            "project-index-weight-change-study", bundle
         ),
     )
     monkeypatch.setattr(
@@ -329,9 +329,12 @@ def test_generic_finding_impact_preserves_the_specific_failure_reason():
     assert result.metrics["finding_count"] == 1
 
 
-def test_index_rows_do_not_invent_a_missing_announcement_date(monkeypatch):
+def test_index_rows_use_observed_weight_date_without_notice_metadata(monkeypatch):
     records = {
-        "index_weights": [{"date": "20240102", "weight": 0.1}],
+        "index_weights": [
+            {"date": "20240101", "weight": 0.1},
+            {"date": "20240102", "weight": 0.12},
+        ],
         "daily": [
             {"trade_date": "20240101", "close": 100.0, "volume": 1000.0},
             {"trade_date": "20240102", "close": 101.0, "volume": 1100.0},
@@ -352,28 +355,69 @@ def test_index_rows_do_not_invent_a_missing_announcement_date(monkeypatch):
     rows, warning = online_module._event_rows(_request(), _bundle())
 
     assert rows
-    assert all(row["announcement_date"] == "" for row in rows)
-    assert all(row["effective_date"] == "2024-01-02" for row in rows)
-    assert "announcement_date unavailable" in warning
+    assert all(row["weight_date"] == "2024-01-02" for row in rows)
+    assert all("announcement_date" not in row for row in rows)
+    assert warning == ""
 
 
-def test_index_event_missing_announcement_cannot_be_published_as_success(monkeypatch):
-    runner = OnlineSkillRunner()
+def test_index_event_without_an_observed_weight_change_is_insufficient(monkeypatch):
     monkeypatch.setattr(
         online_module,
         "_event_rows",
-        lambda request, bundle: ([{"event_id": "event-1"}], "announcement_date unavailable"),
-    )
-    monkeypatch.setattr(
-        runner,
-        "_invoke",
-        lambda *args: ({"status": "pass", "findings": []}, 1),
+        lambda request, bundle: ([], "no observed weight change"),
     )
 
-    result = runner.run_index_event(_request(), _bundle())
+    result = OnlineSkillRunner().run_index_event(_request(), _bundle())
 
     assert result.status == "insufficient-evidence"
-    assert "announcement_date unavailable" in result.warnings
+    assert result.warnings == ["no observed weight change"]
+
+
+def test_index_weight_change_study_uses_panda_weight_dates_without_announcements(
+    monkeypatch,
+):
+    records = {
+        "index_weights": [
+            {"date": "20240102", "weight": 0.10},
+            {"date": "20240103", "weight": 0.10},
+            {"date": "20240104", "weight": 0.12},
+            {"date": "20240105", "weight": 0.12},
+        ],
+        "daily": [
+            {"trade_date": "20240102", "close": 100.0, "volume": 1000.0},
+            {"trade_date": "20240103", "close": 101.0, "volume": 1100.0},
+            {"trade_date": "20240104", "close": 103.0, "volume": 1500.0},
+            {"trade_date": "20240105", "close": 102.0, "volume": 1200.0},
+        ],
+        "index_daily": [
+            {"trade_date": "20240102", "close": 200.0},
+            {"trade_date": "20240103", "close": 201.0},
+            {"trade_date": "20240104", "close": 202.0},
+            {"trade_date": "20240105", "close": 203.0},
+        ],
+    }
+    monkeypatch.setattr(
+        online_module,
+        "_read_records",
+        lambda bundle, name: records[name],
+    )
+
+    result = OnlineSkillRunner().run_index_event(_request(), _bundle())
+
+    assert result.skill_id == "project-index-weight-change-study"
+    assert result.status == "success"
+    assert result.metrics["event_anchor"] == "index_weight_observation_date"
+    assert result.metrics["event_count"] == 1
+    expected_car = (
+        (101.0 / 100.0 - 201.0 / 200.0)
+        + (103.0 / 101.0 - 202.0 / 201.0)
+        + (102.0 / 103.0 - 203.0 / 202.0)
+    )
+    assert abs(
+        result.metrics["mean_cumulative_abnormal_return"] - expected_car
+    ) < 1e-12
+    assert result.findings
+    assert all("announcement_date" not in warning for warning in result.warnings)
 
 
 def _factor_records(count: int) -> list[dict]:

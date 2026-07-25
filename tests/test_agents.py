@@ -9,7 +9,7 @@ ALLOWED = {
     "skill-corporate-action-adjustment-auditor",
     "skill-survivorship-universe-auditor",
     "skill-portfolio-liquidity-stress-test",
-    "skill-index-rebalance-event-study",
+    "project-index-weight-change-study",
     "skill-factor-ranking-sage",
     "skill-model-hpo-evidence-driven",
 }

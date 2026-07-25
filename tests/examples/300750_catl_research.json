@@ -1,7 +1,7 @@
 {
   "input": {
     "skill": "debate_case",
-    "topic": "研究 300750.SZ 的成长因子、波动、流动性和指数事件"
+    "topic": "研究 300750.SZ 的成长因子、波动、流动性和指数权重变化"
   },
   "expected": {
     "symbol": "300750.SZ",
@@ -9,7 +9,7 @@
       "skill-corporate-action-adjustment-auditor",
       "skill-survivorship-universe-auditor",
       "skill-portfolio-liquidity-stress-test",
-      "skill-index-rebalance-event-study",
+      "project-index-weight-change-study",
       "skill-factor-ranking-sage",
       "skill-model-hpo-evidence-driven"
     ]

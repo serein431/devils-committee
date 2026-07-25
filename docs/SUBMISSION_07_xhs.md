@@ -20,7 +20,7 @@ Devil's Committee 是一个面向投资研究初学者的“反方教练”。�
 ## 帖子中的技术事实
 
 - LLM 通过 Volcengine Ark 调用，显示名称是 DeepSeek V4 Pro；`LLM_MODEL` 填活动 Endpoint ID。
-- 真实数据来自 PandaData。每个真实请求在线运行 `corporate-action-adjustment-auditor`、`survivorship-universe-auditor`、`portfolio-liquidity-stress-test`、`index-rebalance-event-study`。
+- 真实数据来自 PandaData。每个真实请求在线运行三个审计 QuantSkills，并执行项目内的 `project-index-weight-change-study`。
 - `factor-ranking-sage` 和 `model-hpo-evidence-driven` 读取预计算报告。
 - 在线 Skill 与单个 Agent 限制 120 秒，整个请求限制 600 秒。
 - A2A 服务支持 SSE、Bearer 鉴权和 Agent Card。
