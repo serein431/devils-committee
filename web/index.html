@@ -116,6 +116,11 @@
     transform:translate(-50%,-50%) scale(1.08);opacity:1;filter:none}
   .face-stage.is-debating .face-player.is-active .face-image{animation:faceTalk .34s ease-in-out infinite alternate;
     filter:drop-shadow(0 24px 38px color-mix(in srgb,var(--face-color) 28%,rgba(0,0,0,.7)))}
+  @media(hover:hover){
+    .face-stage .face-player:hover,.face-stage.is-debating .face-player:hover{z-index:20;opacity:1;filter:none;
+      transform:translate(-50%,-50%) scale(1.1);cursor:pointer}
+    .face-stage.is-debating .face-player:hover .face-name{opacity:1}
+  }
   .stage-speech{position:absolute;left:50%;bottom:7px;z-index:10;width:min(840px,90%);transform:translate(-50%,12px);
     opacity:0;border:1px solid color-mix(in srgb,var(--speaker-color,var(--accent)) 48%,var(--line2));border-radius:8px;
     background:rgba(10,12,13,.92);backdrop-filter:blur(12px);padding:12px 15px;
@@ -200,6 +205,9 @@
   /* ---- committee grid ---- */
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .round-question{grid-column:1/-1;border-left:2px solid var(--accent);background:var(--panel2);
+    padding:9px 12px;color:var(--ink);font-family:var(--sans);font-size:12.5px;line-height:1.55}
+  .round-question b{color:var(--accent);font-family:var(--mono);font-size:10px;letter-spacing:.8px;margin-right:8px}
   .agent{border:1px solid var(--line2);border-radius:5px;background:var(--panel);overflow:hidden;
     opacity:0;transform:translateY(8px);transition:.4s}
   .agent.in{opacity:1;transform:none}
@@ -448,6 +456,7 @@ let recognition=null,recognitionActive=false,recognitionFailed=false,recognition
 let voiceSubmitQueued=false,researchRunning=false,availableVoices=[];
 let speechVoiceCatalogReady=false,narrationQueue=[],narrationBusy=false;
 let speechToken=0,speechWatchdog=0,speechWatchdogFallback=null,activeUtterance=null,speechPaused=false;
+let conversationRoot="",conversationSymbol="",conversationHistory=[],conversationRound=0,activeQuestion="";
 
 function savedVoicePreference(){
   if(!SPEECH_OUTPUT_SUPPORTED)return false;
@@ -854,6 +863,46 @@ function resultNarration(result){
   return parts.join("");
 }
 
+function claimCardId(claimId){
+  const prefix=conversationRound>1?`round-${conversationRound}-`:"";
+  return `${prefix}card-${String(claimId||"").replace(/[^A-Za-z0-9_-]/g,"")}`;
+}
+function stampDomId(claimId){return claimCardId(claimId).replace("card-","stamp-");}
+
+function querySymbol(value){
+  const match=String(value||"").match(/(?:(?:SH|SZ)\s*)?(\d{6})(?:\.(?:SH|SZ))?/i);
+  return match?match[1]:"";
+}
+function resetConversation(){
+  conversationRoot="";conversationSymbol="";conversationHistory=[];conversationRound=0;activeQuestion="";
+  $("#go").textContent="开庭 ⏎";
+  $("#q").placeholder="输入 A 股研究问题，如：600519.SH 的复权、分红、因子和流动性风险";
+}
+function conversationTopic(question){
+  if(!conversationHistory.length)return question;
+  const history=conversationHistory.map((turn,index)=>{
+    const answers=turn.answers.map(item=>`${item.agent}：${item.text}`).join("\n");
+    return `第 ${index+1} 轮用户：${turn.question}\n${answers}`;
+  }).join("\n\n");
+  return `${conversationRoot}\n\n同一研究会话的历史：\n${history}\n\n用户最新追问：${question}\n请四个研究 Agent 分别回答最新追问，并保持原有证据标准。`;
+}
+function appendRoundQuestion(question){
+  const row=document.createElement("div");row.className="round-question";row.dataset.round=String(conversationRound);
+  const label=document.createElement("b");label.textContent=conversationRound===1?"首轮问题":`第 ${conversationRound} 轮追问`;
+  row.append(label,document.createTextNode(question));$("#debate").appendChild(row);
+}
+function rememberConversation(result){
+  if(!activeQuestion)return;
+  const answers=(result.claims||[]).map(claim=>({
+    agent:(SIDE[claim.side]||[claim.agent||"Agent"])[0],
+    text:String(claim.text||claim.plain||"").slice(0,1200),
+  }));
+  conversationHistory.push({question:activeQuestion,answers});activeQuestion="";
+  conversationSymbol=(result.meta||{}).symbol||conversationSymbol;
+  $("#q").value="";$("#q").placeholder="继续追问，四个研究 Agent 会结合前文回答";
+  $("#go").textContent="追问 ⏎";
+}
+
 function handleEvent(ev){
   switch(ev.stage){
     case "data":
@@ -885,6 +934,7 @@ function handleEvent(ev){
       setStage("主持收敛共识与分歧",true);return;
     case "result":
       lightPipe("synthesize",true);renderResult(ev.result);
+      rememberConversation(ev.result);
       queueNarration(makeStageTurn({side:"chair",text:resultNarration(ev.result),speechText:resultNarration(ev.result)},"speaking","result"));return;
   }
 }
@@ -896,13 +946,13 @@ function renderAgent(c){
     if(!metrics.find(m=>m[0]===k))metrics.push([k,v]);}));
   const viz=metrics.slice(0,5).map(([k,v])=>metricRow(k,v)).join("");
   const sk=[...new Set(c.skills_used||[])].map(s=>`<span class="skpill">${esc(s)}</span>`).join("");
-  const d=document.createElement("div");d.className="agent";d.id="card-"+esc(c.id);d.dataset.side=side;
+  const d=document.createElement("div");d.className="agent";d.id=claimCardId(c.id);d.dataset.side=side;
   d.style.setProperty("--sc",C[side]||"var(--accent)");
   d.innerHTML=`<div class="ah">
       <span class="side-dot" style="background:${C[side]||'var(--accent)'}"></span>
       <span class="tag" style="color:${C[side]||'var(--ink)'}">${esc(tag)}</span><span class="zh">${esc(zh)}</span>
       <span class="conf">CONF <span class="num" style="color:${C[side]}">${conf}</span></span>
-      <span class="stamp scan" id="stamp-${esc(c.id)}">⟳ 审计中</span></div>
+      <span class="stamp scan" id="${stampDomId(c.id)}">⟳ 审计中</span></div>
     <div class="abody">
       ${c.plain?`<div class="plain">🗣 ${esc(c.plain)}</div>`:""}
       <div class="argue">${esc(c.text)}</div>
@@ -915,7 +965,7 @@ function renderAgent(c){
 function renderVerdict(v,fromResult){
   const [zh,en,st]=STA[v.status]||[v.status,String(v.status).toUpperCase(),"warn"];
   const col=`var(--${st})`,sev=SEV[v.severity]||(v.status==="pass"?.15:.6);
-  const stamp=document.getElementById("stamp-"+v.claim_id);
+  const stamp=document.getElementById(stampDomId(v.claim_id));
   if(stamp){if(v.status==="pass"){stamp.className="stamp ok";stamp.textContent="✓ 通过";}
     else{stamp.className="stamp bad";stamp.style.background=col;stamp.textContent="⚑ "+zh;}}
   if(v.status==="pass")return;
@@ -997,11 +1047,19 @@ function renderResult(r){
 
 async function run(){
   const q=$("#q").value.trim();if(!q||researchRunning)return;
+  const nextSymbol=querySymbol(q),currentDigits=querySymbol(conversationSymbol||conversationRoot);
+  if(conversationHistory.length&&nextSymbol&&currentDigits&&nextSymbol!==currentDigits)resetConversation();
+  const followUp=conversationHistory.length>0;
+  if(!followUp){conversationRoot=q;conversationSymbol=nextSymbol;conversationHistory=[];}
+  conversationRound=conversationHistory.length+1;activeQuestion=q;
+  const requestTopic=conversationTopic(q);
   researchRunning=true;voiceSubmitQueued=false;$("#go").disabled=true;updateRecognitionButton();
   if(recognitionActive&&recognition){recognitionFailed=true;try{recognition.abort();}catch(_){}}
   flags=0;beginStageDebate();
   queueStageTurn({side:"chair",text:"开庭，委员会开始研究。",speechText:"开庭。委员会开始研究。"},"speaking","system");
-  ["#debate","#verdicts","#dmap","#bounds"].forEach(s=>$(s).innerHTML="");
+  ["#verdicts","#dmap","#bounds"].forEach(s=>$(s).innerHTML="");
+  if(!followUp)$("#debate").innerHTML="";
+  appendRoundQuestion(q);
   ["#debateSec","#auditSec","#mapSec","#sumSec"].forEach(s=>$(s).classList.remove("hidden"));
   $("#auditSec").classList.add("hidden");$("#mapSec").classList.add("hidden");$("#sumSec").classList.add("hidden");
   $("#debateSec").classList.remove("hidden");
@@ -1009,7 +1067,7 @@ async function run(){
   setStage("开庭：4 个研究 Agent 并行取证，审计与主持随后加入",true);
   try{
     const res=await fetch("/a2a?stream=1",{method:"POST",headers:{"Content-Type":"application/json","Accept":"text/event-stream"},
-      body:JSON.stringify({skill:"debate_case",topic:q})});
+      body:JSON.stringify({skill:"debate_case",topic:requestTopic})});
     if(!res.ok||!res.body)throw new Error("stream unavailable");
     const rd=res.body.getReader(),dec=new TextDecoder();let buf="";
     while(true){const{value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
@@ -1017,7 +1075,7 @@ async function run(){
         if(ln)await handleEvent(JSON.parse(ln.slice(5).trim()));}}
   }catch(e){
     try{
-      const r=await fetch("/a2a",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:q})});
+      const r=await fetch("/a2a",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:requestTopic})});
       if(!r.ok)throw new Error("request failed");
       const d=(await r.json()).result;
       await handleEvent({stage:"argue",symbol:(d.meta||{}).symbol});

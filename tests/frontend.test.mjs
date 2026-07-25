@@ -105,6 +105,7 @@ assert.match(html, /rel="icon"/);
 assert.doesNotMatch(html, /仍在吵/);
 assert.doesNotMatch(html, /谁发言，谁走到前面/);
 assert.match(html, /face-player\[data-side="macro"\]:not\(\.is-active\)/);
+assert.match(html, /face-player:hover\{z-index:20/);
 assert.match(html, /#bEngine,#bMode\{display:none\}/);
 for (const removed of ["AA" + "PL", "NV" + "DA", "TS" + "LA"]) {
   assert.doesNotMatch(html, new RegExp(removed));
@@ -406,5 +407,15 @@ window.handleEvent({
 });
 ok("zero-claim result renders safely", document.getElementById("auditSub").textContent.includes("没有可审计论据"));
 ok("zero-claim result is not called all pass", !document.getElementById("auditSub").textContent.includes("全部通过"));
+
+document.getElementById("q").value = "那波动风险怎么看？";
+document.getElementById("go").click();
+await new Promise(resolve => window.setTimeout(resolve, 10));
+const followUpPayload = JSON.parse(fetchCalls.at(-1).options.body);
+ok("follow-up includes the prior conversation context",
+   followUpPayload.topic.includes("同一研究会话的历史") && followUpPayload.topic.includes("用户最新追问：那波动风险怎么看？"));
+ok("follow-up appends a second visible conversation round",
+   document.querySelectorAll("#debate .round-question").length === 2 &&
+   document.querySelector('#debate .round-question[data-round="2"]').textContent.includes("那波动风险怎么看"));
 
 console.log(`\n✔ frontend DOM (quant-terminal): all ${passed} checks green`);
