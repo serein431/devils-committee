@@ -1,0 +1,163 @@
+<style>
+  .asset-page {
+    --panel: #101619;
+    --panel-soft: #172126;
+    --line: #34444c;
+    --text: #edf5f7;
+    --muted: #a9b8bf;
+    --accent: #59d8e7;
+    --good: #45d69c;
+    color: var(--text);
+  }
+  .asset-page > h2 { color: var(--text-primary); }
+  .asset-page h3 { color: var(--text); }
+  .asset-page > .subtitle { color: var(--text-secondary); }
+  .asset-grid {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 18px !important;
+    margin-top: 22px;
+  }
+  .asset-card {
+    display: block !important;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0 !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 14px !important;
+    background: var(--panel) !important;
+    color: var(--text);
+    cursor: pointer;
+    transition: transform .2s, border-color .2s, box-shadow .2s;
+  }
+  .asset-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--accent) !important;
+  }
+  .asset-card.selected {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px var(--accent), 0 12px 30px rgba(0, 0, 0, .18);
+  }
+  .preview {
+    width: 100%;
+    height: 240px;
+    padding: 12px;
+    background: var(--panel-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .preview img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 9px;
+  }
+  .choice-body { padding: 17px 18px 19px; }
+  .choice-body h3 {
+    margin: 0 0 9px;
+    font-size: 17px;
+    line-height: 1.4;
+  }
+  .choice-body p {
+    margin: 0 0 11px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .facts {
+    display: grid;
+    gap: 7px;
+    margin: 13px 0;
+    color: #bdc9ce;
+    font-size: 12px;
+  }
+  .facts b { color: var(--text); }
+  .source {
+    display: inline-block;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 12px;
+  }
+  .pick {
+    display: inline-block;
+    margin-bottom: 10px;
+    padding: 3px 9px;
+    border: 1px solid var(--good);
+    border-radius: 999px;
+    color: var(--good);
+    font-size: 11px;
+  }
+  .note {
+    margin-top: 22px;
+    padding: 13px 15px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  @media (max-width: 900px) {
+    .asset-grid { grid-template-columns: 1fr !important; }
+    .preview { height: min(340px, 55vw); }
+  }
+</style>
+
+<section class="asset-page">
+  <h2>现成 3D 人物素材：三种可行做法</h2>
+  <p class="subtitle">预览图已经保存在本地，不再依赖外站图片。点击卡片即可选择。</p>
+
+  <div class="asset-grid cards">
+    <div class="asset-card card" data-choice="peeps" onclick="toggleSelect(this)">
+      <div class="preview">
+        <img src="/files/peeps-preview.png" alt="Peeps 3D Avatar Maker 预览">
+      </div>
+      <div class="choice-body">
+        <span class="pick">我推荐这个</span>
+        <h3>A · Peeps 人物生成器 + 3D 手势包</h3>
+        <p>用同一个生成器制作四个统一风格的人物，再配现成手势素材，最接近你给的参考图。</p>
+        <div class="facts">
+          <span><b>人物：</b>可换脸型、发型、肤色和服装</span>
+          <span><b>动作：</b>轻微浮动、眨眼、嘴部切换，强调时出现手势</span>
+          <span><b>成本：</b>需要为每个角色整理几张表情图，网页运行较轻</span>
+        </div>
+        <a class="source" href="https://peeps.ui8.net/" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">打开 Peeps 官方生成器 ↗</a>
+      </div>
+    </div>
+
+    <div class="asset-card card" data-choice="lottie" onclick="toggleSelect(this)">
+      <div class="preview">
+        <img src="/files/lottie-preview.png" alt="LottieFiles 动态头像预览">
+      </div>
+      <div class="choice-body">
+        <h3>B · LottieFiles 动态头像包</h3>
+        <p>直接使用已经做好的循环动作，接入速度较快，文件也较小。</p>
+        <div class="facts">
+          <span><b>人物：</b>依赖素材包已有角色，修改空间较小</span>
+          <span><b>动作：</b>通常包含待机、说话、点头或挥手</span>
+          <span><b>成本：</b>较难找到四个完全一致、又接近参考图的人物</span>
+        </div>
+        <a class="source" href="https://lottiefiles.com/free-animations/avatar" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">查看 LottieFiles 头像素材 ↗</a>
+      </div>
+    </div>
+
+    <div class="asset-card card" data-choice="rpm" onclick="toggleSelect(this)">
+      <div class="preview">
+        <img src="/files/rpm-preview.jpg" alt="Ready Player Me 预览">
+      </div>
+      <div class="choice-body">
+        <h3>C · Ready Player Me 真 3D 人物</h3>
+        <p>人物是可驱动的 3D 模型，可以转头、眨眼和做完整动作。</p>
+        <div class="facts">
+          <span><b>人物：</b>每个角色都能单独定制</span>
+          <span><b>动作：</b>最丰富，可使用现成骨骼动画</span>
+          <span><b>成本：</b>页面更重，风格偏游戏人物，不如参考图圆润</span>
+        </div>
+        <a class="source" href="https://readyplayer.me/" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">查看 Ready Player Me ↗</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">授权提醒：正式使用前要保存对应授权页面或购买记录。UI8、LottieFiles 和手势包可能按具体商品收费，不能直接把预览图当作正式素材使用。</div>
+</section>

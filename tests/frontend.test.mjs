@@ -72,7 +72,12 @@ ok("unflagged stamp turned green", document.getElementById("stamp-bear-1").class
 window.handleEvent({
   stage: "result", result: {
     open_disagreements: [
-      { topic: "因子", bull_view: "正方看法", bear_view: "反方看法", status: "open" },
+      {
+        topic: "因子",
+        bull_view: "正方长文本 ".repeat(30),
+        bear_view: "反方长文本 ".repeat(30),
+        status: "open",
+      },
       { topic: "数据", bull_view: "a", bear_view: "b", status: "consensus" }],
     consensus: ["都不荐股"], risk_boundaries: ["仅供学习，不构成投资建议"],
     disclaimer: "免责声明文本",
@@ -91,6 +96,14 @@ window.handleEvent({
 });
 ok("disagreement tracks rendered", document.querySelectorAll("#dmap .track").length === 2);
 ok("open disagreement marked", document.querySelector("#dmap .track.opened") !== null);
+const longTrack = document.querySelector("#dmap .track");
+const longLabel = longTrack.querySelector(".lab");
+const trackStyle = window.getComputedStyle(longTrack);
+const labelStyle = window.getComputedStyle(longLabel);
+ok("long disagreement track grows with its text",
+   trackStyle.height !== "34px" && ["grid", "flex"].includes(trackStyle.display) && labelStyle.position !== "absolute");
+ok("long disagreement text can wrap inside its column",
+   ["anywhere", "break-word"].includes(labelStyle.overflowWrap));
 ok("risk boundaries rendered", document.querySelectorAll("#bounds li").length === 1);
 ok("disclaimer shown", document.getElementById("disc").textContent.includes("免责声明"));
 ok("recommendation:none bar present", document.querySelector(".recbar .k").textContent.includes("NONE"));

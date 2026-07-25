@@ -1,0 +1,75 @@
+<style>
+  .asset-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:22px}
+  .asset-card{overflow:hidden;border:1px solid #34414a;border-radius:14px;background:#0f1417;cursor:pointer;transition:.2s}
+  .asset-card:hover{transform:translateY(-3px);border-color:#53d5e6}
+  .asset-card.selected{outline:3px solid #53d5e6;outline-offset:2px}
+  .preview{height:230px;background:#12191d;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+  .preview:after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,transparent 25%,rgba(0,0,0,.52) 100%);pointer-events:none}
+  .preview img{width:100%;height:100%;object-fit:cover;display:block}
+  .preview .mini{position:absolute;right:10px;bottom:10px;width:88px;height:88px;border:2px solid #111;border-radius:12px;object-fit:cover;z-index:2;box-shadow:0 8px 24px #000}
+  .choice-body{padding:16px 17px 18px}
+  .choice-body h3{margin:0 0 8px}.choice-body p{margin:0 0 10px;color:#91a0aa;line-height:1.55}
+  .facts{display:grid;gap:6px;font-size:12px;color:#b5c1c8;margin:12px 0}
+  .facts b{color:#e7eef2}
+  .source{display:inline-block;color:#55d6e6;text-decoration:none;font-size:12px}
+  .pick{display:inline-block;margin-bottom:9px;padding:3px 8px;border:1px solid #36c98d;border-radius:999px;color:#36c98d;font-size:11px}
+  .note{margin-top:22px;padding:13px 15px;border:1px solid #36424a;border-radius:10px;background:#11171a;color:#9eabb4;line-height:1.6}
+  @media(max-width:900px){.asset-grid{grid-template-columns:1fr}}
+</style>
+
+<h2>现成 3D 人物素材：三种可行做法</h2>
+<p class="subtitle">这些是实际可访问的素材来源，不是我临时画的表情图。点击选择你更愿意采用的做法。</p>
+
+<div class="asset-grid">
+  <div class="asset-card option" data-choice="peeps" onclick="toggleSelect(this)">
+    <div class="preview">
+      <img src="https://peeps-ui8-net-master.s3.amazonaws.com/meta-image.png" alt="Peeps 3D Avatar Maker preview">
+      <img class="mini" src="https://imgs.search.brave.com/R6MRgcH2IikNDxsa80Omn6yPoicbi2r6L44w4eyCZYU/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9pbWFn/ZXMudWk4Lm5ldC91/cGxvYWRzL3VpOC1w/cm9kdWN0LWNhcmRf/MTY5NDM1Mzg1MDk5/Ni5qcGc" alt="3D hand gestures preview">
+    </div>
+    <div class="choice-body">
+      <span class="pick">我推荐这个</span>
+      <h3>A · Peeps 人物生成器 + 3D 手势包</h3>
+      <p>先用同一个生成器做四张统一的人物头像，再搭配现成的手势素材。最接近你给的参考图。</p>
+      <div class="facts">
+        <span><b>人物：</b>可换脸型、发型、肤色和服装</span>
+        <span><b>动作：</b>头像轻微浮动，发言时嘴部切换；强调时出现手势</span>
+        <span><b>代价：</b>需要整理每个角色的几张表情图，但网页很轻</span>
+      </div>
+      <a class="source" href="https://peeps.ui8.net/" target="_blank" onclick="event.stopPropagation()">打开 Peeps 官方生成器 ↗</a>
+    </div>
+  </div>
+
+  <div class="asset-card option" data-choice="lottie" onclick="toggleSelect(this)">
+    <div class="preview">
+      <img src="https://imgs.search.brave.com/UpNf-BOIb7SrScTgaIhiXSDC2xfyyZoWIJmuPU6KQ5g/rs:fit:640:480:1:0/g:ce/aHR0cHM6Ly9sb3R0/aWVmaWxlcy5jb20v/bWFya2V0cGxhY2Uv/YXZhdGFyLTI2Nw" alt="LottieFiles avatar animation preview">
+    </div>
+    <div class="choice-body">
+      <h3>B · LottieFiles 动态头像包</h3>
+      <p>直接使用已经做好的循环动作，接入速度最快，文件也小。</p>
+      <div class="facts">
+        <span><b>人物：</b>依赖套装中已有角色，修改空间较小</span>
+        <span><b>动作：</b>现成待机、说话、点头或挥手</span>
+        <span><b>代价：</b>不一定能找到四个完全一致、又接近参考图的人物</span>
+      </div>
+      <a class="source" href="https://lottiefiles.com/free-animations/avatar" target="_blank" onclick="event.stopPropagation()">查看 LottieFiles 头像素材 ↗</a>
+    </div>
+  </div>
+
+  <div class="asset-card option" data-choice="rpm" onclick="toggleSelect(this)">
+    <div class="preview">
+      <img src="https://imgs.search.brave.com/xN-1sJQp88EAL47F8KlOtTjELDxzbHbYMqt83B5X58M/rs:fit:640:480:1:0/g:ce/aHR0cHM6Ly93d3cu/YWl0b29sc3NwYWNl/LmNvbS91cGxvYWRz/L2l0ZW0vc2NyZWVu/c2hvdHMvcmVhZHkt/cGxheWVyLW1lLmpw/Zw" alt="Ready Player Me preview">
+    </div>
+    <div class="choice-body">
+      <h3>C · Ready Player Me 真 3D 人物</h3>
+      <p>人物是真正的 3D 模型，可以转头、眨眼和做完整动作。</p>
+      <div class="facts">
+        <span><b>人物：</b>每个角色都能单独定制</span>
+        <span><b>动作：</b>最丰富，可使用现成骨骼动画</span>
+        <span><b>代价：</b>页面更重，风格偏游戏人物，也不如参考图圆润</span>
+      </div>
+      <a class="source" href="https://readyplayer.me/" target="_blank" onclick="event.stopPropagation()">查看 Ready Player Me ↗</a>
+    </div>
+  </div>
+</div>
+
+<div class="note">授权提醒：Peeps 的公开介绍称可以免费使用，但正式放进项目之前仍要保存当时的授权页面或购买记录。UI8、LottieFiles 和手势包可能按具体商品收费，不能只看预览图就直接下载使用。</div>

@@ -1,0 +1,64 @@
+<style>
+  .style-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:22px}
+  .style-card{border:1px solid #33404a;border-radius:14px;overflow:hidden;background:#0e1215;cursor:pointer;transition:.2s}
+  .style-card:hover{transform:translateY(-3px);border-color:#54d5e6}
+  .style-card.selected{outline:3px solid #54d5e6;outline-offset:2px}
+  .scene{height:270px;padding:18px;background:linear-gradient(145deg,#11171b,#090b0d);position:relative;overflow:hidden}
+  .scene:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#1d272d 1px,transparent 1px),linear-gradient(90deg,#1d272d 1px,transparent 1px);background-size:28px 28px;opacity:.5}
+  .cast{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:12px;z-index:1}
+  .person{min-height:92px;border:1px solid #2d3940;border-radius:10px;background:#151b1f;padding:10px;display:flex;align-items:center;gap:10px}
+  .face{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-size:29px;flex:none;border:2px solid currentColor;background:#0b0e10}
+  .who{font:700 12px ui-monospace,monospace;letter-spacing:.8px}
+  .line{font:12px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#aab6bf;margin-top:5px;line-height:1.4}
+  .bull{color:#28b9c2}.bear{color:#ef6554}.macro{color:#927cf2}.risk{color:#e1a52b}
+  .style-b .person{transform:rotate(-1deg);box-shadow:4px 4px 0 #050607}
+  .style-b .person:nth-child(even){transform:rotate(1.5deg)}
+  .style-b .face{border-radius:38% 62% 52% 48%;font-size:33px}
+  .style-c .person{flex-direction:column;text-align:center;gap:4px;min-height:104px}
+  .style-c .face{width:62px;height:62px;font-size:36px;border-width:3px;box-shadow:0 0 18px currentColor}
+  .card-copy{padding:16px 17px 18px}
+  .card-copy h3{margin:0 0 7px}.card-copy p{margin:0;color:#8997a2;line-height:1.6}
+  .tag{display:inline-block;margin-top:11px;padding:3px 8px;border:1px solid #34414a;border-radius:999px;color:#a8b4bd;font-size:11px}
+  @media(max-width:900px){.style-grid{grid-template-columns:1fr}.scene{height:auto}}
+</style>
+
+<h2>人类漫画角色走哪种气质？</h2>
+<p class="subtitle">四个人物分别代表多头、空头、宏观和风控。先选画风，动作细节下一步再定。</p>
+
+<div class="style-grid">
+  <div class="style-card option style-a" data-choice="a" onclick="toggleSelect(this)">
+    <div class="scene">
+      <div class="cast">
+        <div class="person bull"><div class="face">🧑‍💼</div><div><div class="who">BULL 多头</div><div class="line">冷静举证，偶尔得意</div></div></div>
+        <div class="person bear"><div class="face">👩‍💻</div><div><div class="who">BEAR 空头</div><div class="line">皱眉质疑，快速反问</div></div></div>
+        <div class="person macro"><div class="face">🧑‍🏫</div><div><div class="who">MACRO 宏观</div><div class="line">翻资料，慢条斯理</div></div></div>
+        <div class="person risk"><div class="face">👩‍⚖️</div><div><div class="who">RISK 风控</div><div class="line">敲桌提醒，表情严肃</div></div></div>
+      </div>
+    </div>
+    <div class="card-copy"><h3>A · 半写实财经漫画</h3><p>成年人设，造型克制，靠表情和小动作增加趣味。和现有暗色页面最合拍。</p><span class="tag">推荐：专业感与趣味较均衡</span></div>
+  </div>
+
+  <div class="style-card option style-b" data-choice="b" onclick="toggleSelect(this)">
+    <div class="scene">
+      <div class="cast">
+        <div class="person bull"><div class="face">😏</div><div><div class="who">BULL 多头</div><div class="line">拍桌：“这就是机会！”</div></div></div>
+        <div class="person bear"><div class="face">🙄</div><div><div class="who">BEAR 空头</div><div class="line">打断：“证据呢？”</div></div></div>
+        <div class="person macro"><div class="face">🤔</div><div><div class="who">MACRO 宏观</div><div class="line">举图表：“先看环境。”</div></div></div>
+        <div class="person risk"><div class="face">😠</div><div><div class="who">RISK 风控</div><div class="line">亮红牌：“不准乱说。”</div></div></div>
+      </div>
+    </div>
+    <div class="card-copy"><h3>B · 夸张法庭漫画</h3><p>动作和表情更大，人物会打断、拍桌、举牌，第一眼最好玩，也最像真的辩论。</p><span class="tag">适合现场演示和短视频</span></div>
+  </div>
+
+  <div class="style-card option style-c" data-choice="c" onclick="toggleSelect(this)">
+    <div class="scene">
+      <div class="cast">
+        <div class="person bull"><div class="face">🤑</div><div class="who">BULL</div></div>
+        <div class="person bear"><div class="face">😰</div><div class="who">BEAR</div></div>
+        <div class="person macro"><div class="face">🧐</div><div class="who">MACRO</div></div>
+        <div class="person risk"><div class="face">🚨</div><div class="who">RISK</div></div>
+      </div>
+    </div>
+    <div class="card-copy"><h3>C · Q 版大头角色</h3><p>头像小巧，反应明显，适合手机页面。但容易显得像小游戏，金融研究的可信度会弱一些。</p><span class="tag">最可爱，最轻松</span></div>
+  </div>
+</div>

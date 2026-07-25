@@ -147,12 +147,13 @@
   .dpill{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.5px;padding:2px 8px;border-radius:3px}
   .dpill.open{color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent)}
   .dpill.cons{color:var(--good);border:1px solid color-mix(in srgb,var(--good) 45%,transparent)}
-  .track{position:relative;height:34px;border:1px solid var(--line);border-radius:4px;background:
+  .track{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:34px;
+    border:1px solid var(--line);border-radius:4px;background:
     linear-gradient(90deg,color-mix(in srgb,var(--bull) 14%,transparent),transparent 42%,transparent 58%,color-mix(in srgb,var(--bear) 14%,transparent))}
   .track .mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line2)}
-  .track .lab{position:absolute;top:50%;transform:translateY(-50%);font-family:var(--sans);font-size:11.5px;
-    max-width:44%;line-height:1.35;color:var(--sub)}
-  .track .lab.l{left:9px} .track .lab.r{right:9px;text-align:right}
+  .track .lab{position:relative;min-width:0;padding:8px 10px;font-family:var(--sans);font-size:11.5px;
+    line-height:1.45;color:var(--sub);overflow-wrap:anywhere;word-break:break-word}
+  .track .lab.l{padding-right:14px}.track .lab.r{padding-left:14px;text-align:right}
   .track.opened{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--warn) 30%,transparent)}
   .track.opened .lab.l{color:var(--bull)} .track.opened .lab.r{color:var(--bear)}
   .dcons{padding:11px 14px;color:var(--sub);font-family:var(--sans);font-size:12.5px;line-height:1.6}
