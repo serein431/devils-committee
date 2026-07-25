@@ -25,7 +25,7 @@ _STATUS_MAP = {
     "pass": "pass",
     "fail": "selection_bias",            # survivorship auditor: proven issue found
     "warning": "thin_data",              # a concern, but not a proven bias
-    "insufficient-evidence": "thin_data",  # never write missing evidence up as pass
+    "insufficient-evidence": "missing_evidence",
 }
 # real severity -> internal severity (models.AuditVerdict.severity)
 _SEV_MAP = {"critical": "high", "high": "high", "medium": "medium",

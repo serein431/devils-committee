@@ -1,3 +1,6 @@
+from datetime import date
+
+from backend import research_request
 from backend.research_request import ResearchRequest, normalize_symbol, symbol_from_text
 
 
@@ -77,6 +80,19 @@ def test_payload_fields_override_text_defaults():
     assert req.spread_bps == 8.0
     assert isinstance(req.spread_bps, float)
     assert req.supported is True
+
+
+def test_default_end_date_moves_weekend_to_previous_weekday(monkeypatch):
+    class Saturday(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 7, 25)
+
+    monkeypatch.setattr(research_request, "date", Saturday)
+
+    req = ResearchRequest.from_payload({"topic": "分析 600519"})
+
+    assert req.end_date == "20260724"
 
 
 def test_unknown_text_does_not_become_a_fake_symbol():

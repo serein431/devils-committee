@@ -148,7 +148,29 @@ def test_empty_live_daily_is_insufficient_and_never_mock(monkeypatch, tmp_path):
 
     assert bundle.status == "insufficient-evidence"
     assert bundle.mode != "mock"
-    assert bundle.datasets == {}
+    assert "daily" not in bundle.datasets
+    assert bundle.datasets["status_change"].rows == 0
+
+
+def test_empty_status_change_is_kept_as_valid_empty_evidence(monkeypatch, tmp_path):
+    panda, _ = _panda_mode(monkeypatch, tmp_path)
+    _install_fake_panda(
+        monkeypatch,
+        daily=_FakeFrame([
+            {
+                "date": "20240102",
+                "symbol": "600519.SH",
+                "close": 10.0,
+                "volume": 100,
+            }
+        ]),
+    )
+
+    bundle = panda.build_market_data_bundle(_request())
+
+    assert bundle.status == "success"
+    assert bundle.datasets["status_change"].rows == 0
+    assert "status_change returned no rows" not in bundle.warnings
 
 
 def test_live_request_error_is_public_and_never_mock(monkeypatch, tmp_path):

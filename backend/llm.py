@@ -73,6 +73,8 @@ class MockLLM:
             return f"调参审计有发现：{explanation or '请查看对应 Skill 结果。'}"
         if status == "thin_data":
             return f"证据不足：{explanation or '对应 Skill 没有足够结果。'}"
+        if status == "missing_evidence":
+            return f"资料缺失：{explanation or '关键数据集或 Skill 结果不可用，当前无法完成审计。'}"
         return "审计：状态未知。"
 
     def chair_line(self, *, symbol: str, kind: str, payload: Any) -> str:
@@ -136,7 +138,9 @@ class OpenAICompatLLM:
         system = (
             f"你是「{PERSONAS['audit']['name']}」，一个独立审计 Agent。"
             "你的天职是抓其他 Agent 论据里的存活/选择偏差、坏数据、过拟合。"
-            "绝不把'缺失证据'写成'通过'。一句话给出结论与理由。"
+            "绝不把'缺失证据'写成'通过'。"
+            "当审计判定为 missing_evidence 时，只说明缺少哪些必要资料以及为什么无法完成检查；"
+            "不得称为样本薄弱，也不得声称已经证实选择偏差。一句话给出结论与理由。"
         )
         user = f"标的：{symbol}\n审计判定：{status}\n审计器原始输出：{json.dumps(detail, ensure_ascii=False)}"
         return self._chat(system, user)

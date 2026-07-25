@@ -133,6 +133,8 @@ SENSITIVE_COLUMN_PARTS = {
     "cookie",
 }
 
+VALID_EMPTY_DATASETS = {"status_change"}
+
 _TIME_SUFFIX = (
     r"(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
     r"(?:Z|[+-]\d{2}:?\d{2})?)?"
@@ -304,11 +306,20 @@ def build_market_data_bundle(request: ResearchRequest) -> MarketDataBundle:
         for name, method_name, params in missing:
             try:
                 frame = getattr(panda_data, method_name)(**params)
-                if frame is None or len(frame) == 0:
+                if frame is None:
                     warnings.append(f"{name} returned no rows")
                     continue
                 normalized = normalize_frame(frame)
                 if len(normalized) == 0:
+                    if name in VALID_EMPTY_DATASETS:
+                        datasets[name] = cache.save(
+                            name,
+                            method_name,
+                            params,
+                            sdk_version,
+                            normalized,
+                        )
+                        continue
                     warnings.append(f"{name} returned no rows")
                     continue
                 datasets[name] = cache.save(

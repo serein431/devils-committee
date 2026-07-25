@@ -165,6 +165,46 @@ def test_debate_audits_each_shared_evidence_claim(monkeypatch, evidence_fixture)
     assert all(verdict.plain for verdict in result.audit_flags())
 
 
+def test_stream_emits_detailed_claim_text_as_ordered_deltas(
+    monkeypatch,
+    evidence_fixture,
+):
+    async def prepare(self, request):
+        return evidence_fixture
+
+    async def collect_events():
+        return [
+            event
+            async for event in DebateOrchestrator().stream(
+                "600519 多空",
+                pace=0,
+            )
+        ]
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    events = asyncio.run(collect_events())
+    claims = {
+        event["id"]: event
+        for event in events
+        if event.get("stage") == "claim"
+    }
+    starts = {
+        event["id"]
+        for event in events
+        if event.get("stage") == "claim_start"
+    }
+    streamed = {}
+    for event in events:
+        if event.get("stage") == "claim_delta":
+            streamed.setdefault(event["id"], []).append(event["delta"])
+
+    assert starts == set(claims)
+    assert set(streamed) == set(claims)
+    for claim_id, claim in claims.items():
+        assert "".join(streamed[claim_id]) == claim["text"]
+        assert claim["plain"] not in "".join(streamed[claim_id])
+
+
 def test_skills_manifest_lists_real_result_contract(monkeypatch, evidence_fixture):
     async def prepare(self, request):
         return evidence_fixture

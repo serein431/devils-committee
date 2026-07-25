@@ -19,6 +19,7 @@ AuditStatus = Literal[
     "selection_bias",    # survivorship-universe-auditor: cherry-picked universe
     "bad_data",          # intraday / corporate-action data-quality auditors
     "thin_data",         # not enough evidence to stand (NOT the same as "pass")
+    "missing_evidence",  # a required dataset or skill result is unavailable
 ]
 
 
@@ -120,7 +121,7 @@ class AuditVerdict:
     """The killer feature: an INDEPENDENT check of another agent's claim.
 
     Mirrors the survivorship-universe-auditor philosophy — never writes missing
-    evidence up as 'pass'; 'thin_data' is a distinct, honest verdict.
+    evidence up as 'pass'; missing evidence remains distinct from thin samples.
     """
     claim_id: str
     status: AuditStatus

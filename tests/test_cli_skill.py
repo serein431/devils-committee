@@ -32,13 +32,23 @@ def test_adapter_maps_real_output_into_internal_vocab():
     real = cli.invoke(SKILL_DIR, "audit_universe.py", ["--demo"], timeout=120)
     mapped = cli.to_verdict_fields(real)
     assert mapped["status"] in ("pass", "suspected_overfit", "selection_bias",
-                                "bad_data", "thin_data")
+                                "bad_data", "thin_data", "missing_evidence")
     assert mapped["severity"] in ("none", "low", "medium", "high")
     assert isinstance(mapped["reason"], str) and mapped["reason"]
     # the built-in demo has known survivorship problems -> must NOT map to a clean pass
     if real["status"] == "fail":
         assert mapped["status"] != "pass"
         assert mapped["severity"] in ("low", "medium", "high")
+
+
+def test_adapter_keeps_missing_evidence_distinct_from_thin_data():
+    mapped = cli.to_verdict_fields({
+        "status": "insufficient-evidence",
+        "findings": [],
+        "limitations": ["status_change unavailable"],
+    })
+
+    assert mapped["status"] == "missing_evidence"
 
 
 def test_exact_entry_is_used(tmp_path):

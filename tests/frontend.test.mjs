@@ -43,11 +43,25 @@ ok("symbol badge set", document.getElementById("bSym").textContent === "600519.S
 ok("pipeline stage 'argue' lit", document.querySelector('.pstage[data-st="argue"]').className.includes("on"));
 
 const evidence = [{ skill: "skill-factor-ranking-sage", summary: "因子", metrics: { ic: 0.079, ir: 0.9, n_obs: 24 } }];
-const bullImage = document.querySelector('.face-player[data-side="bull"] .face-image');
-const bullFrames = [];
-const frameObserver = new window.MutationObserver(() => bullFrames.push(bullImage.getAttribute("src")));
-frameObserver.observe(bullImage, { attributes: true, attributeFilter: ["src"] });
+const stageFrames = [];
+const frameObserver = new window.MutationObserver(mutations => {
+  mutations.forEach(mutation => stageFrames.push(mutation.target.getAttribute("src")));
+});
+document.querySelectorAll("#faceStage .face-image").forEach(image => {
+  frameObserver.observe(image, { attributes: true, attributeFilter: ["src"] });
+});
 for (const side of ["bull", "bear", "macro", "risk"]) {
+  window.handleEvent({
+    stage: "claim_start", id: `${side}-1`, agent: side, side,
+  });
+  window.handleEvent({
+    stage: "claim_delta", id: `${side}-1`, agent: side, side,
+    delta: `${side} 具体论据第一段；`,
+  });
+  window.handleEvent({
+    stage: "claim_delta", id: `${side}-1`, agent: side, side,
+    delta: `${side} 具体论据第二段。`,
+  });
   window.handleEvent({
     stage: "claim", id: `${side}-1`, agent: side, side, confidence: 0.6,
     text: side === "bull" ? "<img src=x onerror=alert(1)>看多论据" : `${side} 论据`,
@@ -58,13 +72,16 @@ for (const side of ["bull", "bear", "macro", "risk"]) {
 ok("four agent panels rendered", document.querySelectorAll("#debate .agent").length === 4);
 ok("agent id matches claim id", !!document.getElementById("card-bull-1"));
 ok("one stage speaker comes forward", document.querySelectorAll("#faceStage .face-player.is-active").length === 1);
-ok("active speaker uses the speaking expression",
-   document.querySelector("#faceStage .face-player.is-active .face-image").getAttribute("src").endsWith("/bull-speaking.webp"));
+ok("first screen streams the detailed claim instead of beginner copy",
+   document.getElementById("stageQuote").textContent.includes("具体论据") &&
+   !document.getElementById("stageQuote").textContent.includes("人话"));
+const activeSpeaker = document.querySelector("#faceStage .face-player.is-active");
+ok("active speaker uses its speaking expression",
+   activeSpeaker.querySelector(".face-image").getAttribute("src").endsWith(`/${activeSpeaker.dataset.side}-speaking.webp`));
 await new Promise(resolve => window.setTimeout(resolve, 12));
 frameObserver.disconnect();
 ok("speaking head cycles through multiple expression images",
-   Number(document.querySelector('.face-player[data-side="bull"]').dataset.frameTick) > 0 &&
-   new Set(bullFrames).size >= 2);
+   Number(activeSpeaker.dataset.frameTick) > 0 && new Set(stageFrames).size >= 2);
 ok("evidence cards stay compact below the stage", document.querySelectorAll("#debate .agent-avatar").length === 0);
 
 const bullHtml = document.getElementById("card-bull-1").innerHTML;
@@ -88,6 +105,15 @@ ok("flagged card got slam animation", document.getElementById("card-bull-1").cla
 ok("verdict row appended", document.querySelectorAll("#verdicts .vrow").length === 1);
 ok("severity ring drawn", document.querySelector("#verdicts .vrow .ring") !== null);
 ok("live provenance badge shown", document.querySelector("#verdicts .prov.real") !== null);
+window.handleEvent({
+  stage: "audit_flag", claim_id: "risk-1", status: "missing_evidence", severity: "medium",
+  reason: "关键状态数据缺失，无法完成存活偏差检查", remediation: "补齐状态变化和期末股票列表",
+  plain: "资料没拿全，不能下结论", provenance: "live",
+  audit_skill: "skill-survivorship-universe-auditor",
+});
+ok("missing evidence has its own audit label",
+   document.getElementById("verdicts").textContent.includes("MISSING-EVIDENCE") &&
+   !document.getElementById("verdicts").textContent.includes("THIN-DATA"));
 
 // unflagged claims pass on synthesize
 window.handleEvent({ stage: "synthesize" });
@@ -139,6 +165,10 @@ ok("data and skill statuses shown", document.getElementById("trace").textContent
    document.getElementById("trace").textContent.includes("skill-x[success/live]"));
 ok("map + summary sections visible", !document.getElementById("mapSec").className.includes("hidden") &&
    !document.getElementById("sumSec").className.includes("hidden"));
+await new Promise(resolve => window.setTimeout(resolve, 40));
+ok("first screen keeps the last detailed statement after completion",
+   document.getElementById("stageQuote").textContent.includes("关键状态数据缺失") &&
+   !document.getElementById("stageQuote").textContent.includes("向下滑动"));
 
 // view toggle: expert is default, beginner toggles
 ok("expert mode is default (not beginner)", !document.body.classList.contains("beginner"));

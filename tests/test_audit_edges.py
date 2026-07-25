@@ -14,7 +14,14 @@ def test_enforce_dict_scrubs_and_adds_disclaimer():
 
 def test_mock_audit_reason_covers_every_status():
     m = llm.MockLLM()
-    for status in ("pass", "selection_bias", "bad_data", "suspected_overfit", "thin_data"):
+    for status in (
+        "pass",
+        "selection_bias",
+        "bad_data",
+        "suspected_overfit",
+        "thin_data",
+        "missing_evidence",
+    ):
         txt = m.audit_reason(status=status, symbol="600519", detail={})
         assert isinstance(txt, str) and txt
     # unknown status still returns a string, never raises

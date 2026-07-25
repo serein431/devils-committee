@@ -59,7 +59,8 @@ def test_audit_does_not_turn_missing_evidence_into_pass(
         )
     )
 
-    assert any(item.status == "thin_data" for item in verdicts)
+    assert any(item.status == "missing_evidence" for item in verdicts)
+    assert not any(item.status == "thin_data" for item in verdicts)
 
 
 def test_audit_does_not_turn_skill_error_into_pass(evidence_fixture):
@@ -73,7 +74,7 @@ def test_audit_does_not_turn_skill_error_into_pass(evidence_fixture):
     verdicts = asyncio.run(AuditAgent(MockLLM()).audit(evidence, claims))
 
     assert any(
-        item.status == "thin_data"
+        item.status == "missing_evidence"
         and item.audit_skill == "skill-survivorship-universe-auditor"
         for item in verdicts
     )

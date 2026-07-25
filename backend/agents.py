@@ -115,11 +115,11 @@ class AuditAgent(_Base):
                     or claim.side in {"bull", "risk"}
                 )
             ]
-            thin = next(
+            unavailable = next(
                 (
                     item
                     for item in relevant
-                    if item.status != "success"
+                    if item.status in {"insufficient-evidence", "error"}
                 ),
                 None,
             )
@@ -127,8 +127,12 @@ class AuditAgent(_Base):
                 (item for item in relevant if item.findings),
                 None,
             )
-            if thin is not None:
-                status, source, severity = "thin_data", thin, "low"
+            if unavailable is not None:
+                status, source, severity = (
+                    "missing_evidence",
+                    unavailable,
+                    "medium",
+                )
             elif flagged is not None:
                 status = AUDIT_STATUS[flagged.skill_id]
                 source, severity = flagged, "medium"

@@ -27,6 +27,7 @@ from .skills.runner import ResearchEvidence, SkillRunner
 GLOBAL_BUDGET_SEC = CONFIG.request_budget_sec
 PER_AGENT_TIMEOUT_SEC = 120
 MAX_AUDIT_ROUNDS = 1
+CLAIM_STREAM_CHARS = 12
 
 _PUBLIC_TIMEOUT = "研究请求超过内部时间限制。"
 _PUBLIC_DATA_ERROR = "研究数据暂不可用，请稍后重试。"
@@ -176,6 +177,24 @@ class DebateOrchestrator:
                 for claim in side_claims:
                     claim.plain = plain_claim(claim.side)
                     claims.append(claim)
+                    yield {
+                        "stage": "claim_start",
+                        "id": claim.id,
+                        "agent": claim.agent,
+                        "side": claim.side,
+                    }
+                    for delta in _claim_stream_chunks(claim.text):
+                        yield {
+                            "stage": "claim_delta",
+                            "id": claim.id,
+                            "agent": claim.agent,
+                            "side": claim.side,
+                            "delta": delta,
+                        }
+                        await _pace_within_budget(
+                            min(pace, 0.035),
+                            deadline,
+                        )
                     yield {
                         "stage": "claim",
                         "id": claim.id,
@@ -512,6 +531,14 @@ def _evidence_modes(evidence: ResearchEvidence) -> list[str]:
     modes.update(result.mode for result in evidence.results.values())
     allowed = {"live", "cache", "precomputed", "mock"}
     return sorted(mode for mode in modes if mode in allowed)
+
+
+def _claim_stream_chunks(text: str, size: int = CLAIM_STREAM_CHARS) -> list[str]:
+    """Split one public claim into short, ordered SSE fragments."""
+
+    if not text:
+        return []
+    return [text[index:index + size] for index in range(0, len(text), size)]
 
 
 def _as_request(topic: str | ResearchRequest) -> ResearchRequest:

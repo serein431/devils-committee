@@ -14,6 +14,12 @@ _NON_TICKER = {
 }
 
 
+def _previous_weekday(value: date) -> date:
+    while value.weekday() >= 5:
+        value -= timedelta(days=1)
+    return value
+
+
 def normalize_symbol(value: str) -> tuple[str, str]:
     raw = value.strip().upper()
     a_share = re.fullmatch(r"(?:(SH|SZ))?(\d{6})(?:\.(SH|SZ))?", raw)
@@ -71,7 +77,10 @@ class ResearchRequest:
             else symbol_from_text(topic)
         )
         today = date.today()
-        end = str(payload.get("end_date") or today.strftime("%Y%m%d"))
+        end = str(
+            payload.get("end_date")
+            or _previous_weekday(today).strftime("%Y%m%d")
+        )
         start = str(
             payload.get("start_date")
             or (today - timedelta(days=730)).strftime("%Y%m%d")
