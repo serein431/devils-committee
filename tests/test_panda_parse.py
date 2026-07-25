@@ -463,3 +463,29 @@ def test_mock_mode_keeps_deterministic_mock_behavior(monkeypatch, tmp_path):
 
     assert first.source == "mock"
     assert first.close == second.close
+
+
+def test_stock_daily_uses_dynamic_request_dates(monkeypatch, tmp_path):
+    from backend.skills import data
+
+    captured = {}
+
+    def fake_bundle(request):
+        captured["request"] = request
+        return types.SimpleNamespace(
+            status="failed", datasets={}, warnings=["test unavailable"]
+        )
+
+    monkeypatch.setattr(
+        data,
+        "CONFIG",
+        dataclasses.replace(CONFIG, cache_dir=str(tmp_path), data_mode="panda"),
+    )
+    monkeypatch.setattr("backend.skills.panda.build_market_data_bundle", fake_bundle)
+
+    with pytest.raises(data.EvidenceUnavailable):
+        data.get_stock_daily("300750.SZ")
+
+    expected = data.ResearchRequest.from_payload({"symbol": "300750.SZ"})
+    assert captured["request"].start_date == expected.start_date
+    assert captured["request"].end_date == expected.end_date

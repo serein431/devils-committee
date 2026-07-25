@@ -80,8 +80,8 @@ def _mock_bars(symbol: str, n: int = 250) -> DailyBars:
     return DailyBars(symbol=symbol, dates=dates, close=closes, volume=vols, source="mock")
 
 
-def get_stock_daily(symbol: str, start_date: str = "20220101",
-                    end_date: str = "20241231") -> DailyBars:
+def get_stock_daily(symbol: str, start_date: str | None = None,
+                    end_date: str | None = None) -> DailyBars:
     """Fetch daily bars. Mock by default; real panda_data when DATA_MODE=panda.
 
     Note: panda_data caps the date range at 5 years (error 100008); keep the
@@ -92,12 +92,13 @@ def get_stock_daily(symbol: str, start_date: str = "20220101",
     from .panda import build_market_data_bundle
 
     normalized_symbol, market = normalize_symbol(symbol)
+    defaults = ResearchRequest.from_payload({"symbol": normalized_symbol})
     request = ResearchRequest(
         symbol=normalized_symbol,
         market=market,
         question="daily market data",
-        start_date=start_date,
-        end_date=end_date,
+        start_date=start_date or defaults.start_date,
+        end_date=end_date or defaults.end_date,
     )
     bundle = build_market_data_bundle(request)
     if bundle.status != "success" or "daily" not in bundle.datasets:
