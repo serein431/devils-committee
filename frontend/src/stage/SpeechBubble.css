@@ -1,0 +1,82 @@
+.bubble {
+  position: relative;
+  max-width: 480px;
+  min-width: 280px;
+  padding: 18px 22px;
+  border-radius: 24px;
+  border: 1px solid var(--line2);
+  background: var(--bg-glass);
+  backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.bubble::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: 20px;
+  right: 20px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--role-color), transparent);
+  border-radius: 2px;
+}
+
+.bubble-role {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.bubble-conf {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--sub);
+  font-weight: 500;
+  background: var(--bg);
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
+.bubble-text {
+  margin: 12px 0 0;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--ink);
+  font-weight: 400;
+}
+
+.bubble-tail {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 16px;
+  height: 16px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(24px);
+  border-left: 1px solid var(--line2);
+  border-top: 1px solid var(--line2);
+}
+
+.caret-blink {
+  color: var(--role-color);
+  margin-left: 2px;
+  animation: caret 1s steps(1) infinite;
+  font-weight: 700;
+}
+
+@keyframes caret {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}

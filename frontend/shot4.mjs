@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ executablePath:'/usr/bin/chromium', headless:true });
+const p = await (await b.newContext({ viewport:{width:1100,height:900}, deviceScaleFactor:2 })).newPage();
+await p.goto('http://127.0.0.1:8090/', { waitUntil:'networkidle' });
+await p.waitForTimeout(600);
+await p.screenshot({ path:'/tmp/dc-dark-1.png' });
+await p.locator('input').first().fill('600519.SH 复权、分红、因子和流动性风险');
+await p.getByText('开庭').first().click();
+await p.waitForTimeout(2200);
+await p.screenshot({ path:'/tmp/dc-dark-2.png', fullPage:true });
+await b.close(); console.log('done');

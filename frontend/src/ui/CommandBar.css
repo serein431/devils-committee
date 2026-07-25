@@ -1,0 +1,146 @@
+.cmdbar {
+  margin-top: 8px;
+}
+
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 20px;
+  border-radius: 20px;
+  background: var(--bg-glass);
+  border: 1px solid var(--line2);
+  backdrop-filter: blur(24px);
+}
+
+.cmd .caret {
+  color: var(--chair);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.cmd input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--ink);
+  font-size: 15px;
+  padding: 14px 4px;
+  font-family: var(--sans);
+  font-weight: 400;
+}
+
+.cmd input::placeholder {
+  color: var(--dim);
+  font-weight: 300;
+}
+
+.go {
+  background: var(--gradient-btn);
+  color: #fff;
+  border: 0;
+  border-radius: 14px;
+  padding: 12px 28px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  font-size: 14px;
+  text-transform: uppercase;
+  box-shadow:
+    0 4px 20px rgba(183, 0, 168, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.go::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.2), transparent);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.go:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 30px rgba(183, 0, 168, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.go:hover:not(:disabled)::before {
+  opacity: 1;
+}
+
+.go:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.chips {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  background: var(--bg-glass);
+  border: 1px solid var(--line2);
+  color: var(--sub);
+  border-radius: 12px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-family: var(--mono);
+  font-weight: 500;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(12px);
+}
+
+.chip:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--chair);
+  background: rgba(63, 211, 230, 0.1);
+}
+
+.chip:disabled {
+  opacity: 0.5;
+}
+
+.mode-toggle {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  background: var(--bg-glass);
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  padding: 4px;
+  backdrop-filter: blur(12px);
+}
+
+.mode-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--sub);
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: all 0.2s ease;
+}
+
+.mode-toggle button.on {
+  background: var(--chair);
+  color: var(--bg);
+}

@@ -1,0 +1,78 @@
+.result-wrap {
+  margin-top: 24px;
+}
+
+.recbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  border-left: 4px solid var(--crit);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: var(--bg-glass);
+  backdrop-filter: blur(24px);
+}
+
+.rec-k {
+  color: var(--crit);
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.rec-v {
+  font-size: 14px;
+  color: var(--sub);
+  line-height: 1.6;
+  font-weight: 300;
+}
+
+.rec-v b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.bounds {
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+}
+
+.bounds li {
+  position: relative;
+  padding: 12px 0 12px 24px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  border-top: 1px solid var(--line);
+  font-weight: 400;
+}
+
+.bounds li::before {
+  content: '▸';
+  position: absolute;
+  left: 4px;
+  color: var(--dim);
+}
+
+.disc {
+  margin: 20px 0 0;
+  padding: 16px 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--sub);
+  border: 1px dashed var(--line2);
+  border-radius: 16px;
+  font-weight: 300;
+}
+
+.trace {
+  margin: 16px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  word-break: break-all;
+  line-height: 1.6;
+}

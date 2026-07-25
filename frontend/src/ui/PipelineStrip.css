@@ -1,0 +1,57 @@
+.pipe {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  margin-top: 20px;
+  border-radius: 18px;
+  background: var(--bg-glass);
+  border: 1px solid var(--line2);
+  backdrop-filter: blur(24px);
+}
+
+.pstage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--dim);
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: color 0.3s ease;
+}
+
+.pstage-idx {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--line2);
+  font-size: 12px;
+  font-weight: 700;
+  transition: all 0.3s ease;
+}
+
+.pstage.on {
+  color: var(--ink);
+}
+
+.pstage.on .pstage-idx {
+  border-color: var(--chair);
+  color: var(--chair);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--chair) 40%, transparent);
+}
+
+.pstage.done .pstage-idx {
+  background: var(--good);
+  border-color: var(--good);
+  color: #fff;
+}
+
+.pstage-arrow {
+  margin: 0 12px;
+  color: var(--line2);
+  font-weight: 300;
+}
