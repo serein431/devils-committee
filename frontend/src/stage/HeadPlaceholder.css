@@ -12,32 +12,56 @@
   place-items: center;
 }
 
-/* Peeps PNG 层 */
+/* 3D 卡通头像层 */
 .head-art {
   position: relative;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 3px color-mix(in srgb, var(--role-color) 30%, transparent);
+  transition: box-shadow 0.3s ease;
 }
+
 .head-art img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  filter: drop-shadow(0 16px 32px rgba(0, 0, 0, 0.5));
+  object-fit: cover;
   user-select: none;
 }
+
 .head-art .art-talk {
   opacity: 0;
 }
-.state-speaking.has-art .head-art img {
-  filter: drop-shadow(0 0 24px color-mix(in srgb, var(--role-color) 60%, transparent))
-    drop-shadow(0 16px 32px rgba(0, 0, 0, 0.5));
-}
-.state-waiting.has-art .head-art {
-  opacity: 0.5;
-  filter: saturate(0.6) brightness(0.8);
+
+/* 说话状态发光 */
+.state-speaking.has-art .head-art {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 4px color-mix(in srgb, var(--role-color) 60%, transparent),
+    0 0 40px color-mix(in srgb, var(--role-color) 50%, transparent);
 }
 
-/* 伪 3D 球 - 更现代的暗色风格 */
+.state-waiting.has-art .head-art {
+  opacity: 0.5;
+  filter: saturate(0.6) brightness(0.7);
+}
+
+.state-flagged.has-art .head-art {
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 4px color-mix(in srgb, var(--crit) 60%, transparent),
+    0 0 30px color-mix(in srgb, var(--crit) 40%, transparent);
+}
+
+.state-audited.has-art .head-art {
+  opacity: 0.7;
+  filter: saturate(0.7) brightness(0.85);
+}
+
+/* 伪 3D 球 - 回退用 */
 .head-ball {
   position: relative;
   border-radius: 50%;
@@ -87,21 +111,11 @@
 }
 
 .state-speaking {
-  box-shadow:
-    inset 0 -8px 16px rgba(0, 0, 0, 0.25),
-    inset 0 6px 12px rgba(255, 255, 255, 0.4),
-    0 0 0 3px color-mix(in srgb, var(--role-color) 40%, transparent),
-    0 0 40px color-mix(in srgb, var(--role-color) 50%, transparent),
-    0 20px 50px rgba(0, 0, 0, 0.5);
   transform: scale(1.05);
 }
 
 .state-flagged {
-  box-shadow:
-    inset 0 -8px 16px rgba(0, 0, 0, 0.3),
-    0 0 0 3px color-mix(in srgb, var(--crit) 60%, transparent),
-    0 0 30px color-mix(in srgb, var(--crit) 40%, transparent),
-    0 16px 40px rgba(0, 0, 0, 0.4);
+  /* flagged 状态由 has-art 处理 */
 }
 
 .state-audited {
@@ -125,6 +139,7 @@
   color: #fff;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   border: 2px solid var(--bg);
+  z-index: 10;
 }
 
 .head-flag {

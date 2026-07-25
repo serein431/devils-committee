@@ -1,43 +1,40 @@
 .stage {
   position: relative;
   width: 100%;
-  padding: 32px 24px;
+  padding: 40px;
   margin-top: 24px;
   border-radius: var(--radius-lg);
+  min-height: 600px;
 }
 
-/* 三栏:左列 · 中央发言区 · 右列 */
+/* 主区域 */
 .arena {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 32px;
-  min-height: 480px;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
 }
 
-.bench {
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-  justify-content: center;
+/* 角落座位 */
+.corner-seat {
+  padding: 10px;
 }
 
-.bench-slot {
-  display: flex;
-  justify-content: center;
-}
-
-.center-col {
+/* 中央发言区 */
+.center-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  min-height: 420px;
+  gap: 20px;
+  z-index: 10;
 }
 
 .spotlight {
-  z-index: 5;
   position: relative;
 }
 
@@ -45,11 +42,11 @@
 .spotlight::before {
   content: '';
   position: absolute;
-  inset: -30px;
+  inset: -40px;
   border-radius: 50%;
   background: radial-gradient(
     circle,
-    color-mix(in srgb, var(--role-color, #3fd3e6) 15%, transparent) 0%,
+    color-mix(in srgb, var(--role-color, #3fd3e6) 20%, transparent) 0%,
     transparent 70%
   );
   animation: pulse-glow 2s ease-in-out infinite;
@@ -76,26 +73,26 @@
   min-height: 100px;
 }
 
-@media (max-width: 760px) {
+/* 响应式 */
+@media (max-width: 768px) {
   .stage {
-    padding: 20px 16px;
+    padding: 20px;
+    min-height: 500px;
   }
-  .arena {
-    grid-template-columns: 1fr;
-    gap: 16px;
+
+  .corner-seat {
+    padding: 5px;
   }
-  /* 窄屏:两列合并成顶部两排小头,中央发言区在下 */
-  .bench {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 16px;
-    justify-content: center;
+
+  .corner-seat :global(.head-wrap) {
+    transform: scale(0.7);
   }
-  .center-col {
-    order: -1;
-    min-height: 320px;
-  }
-  .spotlight::before {
-    inset: -20px;
+
+  .center-stage {
+    position: relative;
+    left: auto;
+    top: auto;
+    transform: none;
+    margin-top: 120px;
   }
 }

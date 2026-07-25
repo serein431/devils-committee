@@ -1,62 +1,20 @@
-import { LayoutGroup, motion } from 'framer-motion'
+import { LayoutGroup, motion, AnimatePresence } from 'framer-motion'
 import { AgentHead } from './AgentHead'
 import { SpeechBubble } from './SpeechBubble'
 import type { DebateState } from '../state/debateReducer'
 import { type Role } from '../sse/contract'
 import './Stage.css'
 
-// 左右两列站位(不圆桌):左 = 多头/宏观/主持,右 = 空头/风控/审计。
-// 发言者从所属侧滑到中央放大,其余留在两侧变淡等待。
-const LEFT: Role[] = ['bull', 'macro', 'chair']
-const RIGHT: Role[] = ['bear', 'risk', 'audit']
-
 const spring = { type: 'spring' as const, stiffness: 230, damping: 26, mass: 0.9 }
 
-// 入场动画变体
-const benchVariants = {
-  hidden: (side: 'l' | 'r') => ({
-    opacity: 0,
-    x: side === 'l' ? -60 : 60,
-  }),
-  visible: () => ({
-    opacity: 1,
-    x: 0,
-    transition: {
-      type: 'spring' as const,
-      stiffness: 200,
-      damping: 25,
-      staggerChildren: 0.1,
-      delayChildren: 0.2,
-    },
-  }),
-}
-
-const headVariants = {
-  hidden: { opacity: 0, y: 30, scale: 0.8 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    scale: 1,
-    transition: {
-      type: 'spring' as const,
-      stiffness: 260,
-      damping: 24,
-    },
-  },
-}
-
-const spotlightVariants = {
-  hidden: { opacity: 0, scale: 0.5, y: 50 },
-  visible: {
-    opacity: 1,
-    scale: 1,
-    y: 0,
-    transition: {
-      type: 'spring' as const,
-      stiffness: 200,
-      damping: 22,
-    },
-  },
+// 6个角色的固定位置（百分比）
+const ROLE_POSITIONS: Record<Role, { left: string; top: string }> = {
+  bull: { left: '5%', top: '10%' },      // 左上
+  macro: { left: '85%', top: '10%' },    // 右上
+  chair: { left: '5%', top: '75%' },     // 左下
+  bear: { left: '85%', top: '75%' },     // 右下
+  risk: { left: '85%', top: '42%' },     // 右中
+  audit: { left: '5%', top: '42%' },     // 左中
 }
 
 interface Props {
@@ -64,37 +22,35 @@ interface Props {
   beginner: boolean
 }
 
-function Bench({
-  roles,
-  side,
+// 角落座位组件
+function CornerSeat({
+  role,
   state,
+  isSpeaker,
 }: {
-  roles: Role[]
-  side: 'l' | 'r'
+  role: Role
   state: DebateState
+  isSpeaker: boolean
 }) {
+  const pos = ROLE_POSITIONS[role]
+  const headState = state.heads[role].state
+
   return (
     <motion.div
-      className={`bench bench-${side}`}
-      variants={benchVariants}
-      initial="hidden"
-      animate="visible"
-      custom={side}
+      className="corner-seat"
+      style={{
+        position: 'absolute',
+        left: pos.left,
+        top: pos.top,
+      }}
+      initial={{ opacity: 0, scale: 0.5 }}
+      animate={{
+        opacity: isSpeaker ? 0 : 1,
+        scale: isSpeaker ? 0.5 : 1,
+      }}
+      transition={spring}
     >
-      {roles
-        .filter((r) => r !== state.speakerId)
-        .map((r) => (
-          <motion.div
-            key={r}
-            layout
-            layoutId={`head-${r}`}
-            className="bench-slot"
-            variants={headVariants}
-            transition={spring}
-          >
-            <AgentHead role={r} state={state.heads[r].state} size={72} showLabel />
-          </motion.div>
-        ))}
+      <AgentHead role={role} state={headState} size={80} showLabel />
     </motion.div>
   )
 }
@@ -102,37 +58,50 @@ function Bench({
 export function Stage({ state, beginner }: Props) {
   const { speakerId, heads, currentClaim } = state
 
+  // 获取所有非发言者角色
+  const allRoles: Role[] = ['bull', 'bear', 'macro', 'risk', 'audit', 'chair']
+  const waitingRoles = allRoles.filter((r) => r !== speakerId)
+
   return (
     <div className="stage glass">
       <LayoutGroup>
         <div className="arena">
-          <Bench roles={LEFT} side="l" state={state} />
+          {/* 角落座位 */}
+          {waitingRoles.map((role) => (
+            <CornerSeat
+              key={role}
+              role={role}
+              state={state}
+              isSpeaker={false}
+            />
+          ))}
 
-          <div className="center-col">
-            {speakerId && (
-              <motion.div
-                layout
-                layoutId={`head-${speakerId}`}
-                className="spotlight"
-                variants={spotlightVariants}
-                initial="hidden"
-                animate="visible"
-                transition={spring}
-              >
-                <AgentHead
-                  role={speakerId}
-                  state={heads[speakerId].state}
-                  size={180}
-                  showLabel
-                />
-              </motion.div>
-            )}
+          {/* 中央发言区 */}
+          <div className="center-stage">
+            <AnimatePresence mode="wait">
+              {speakerId && (
+                <motion.div
+                  key={speakerId}
+                  className="spotlight"
+                  initial={{ opacity: 0, scale: 0.5, y: 50 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.5, y: -50 }}
+                  transition={spring}
+                >
+                  <AgentHead
+                    role={speakerId}
+                    state={heads[speakerId].state}
+                    size={200}
+                    showLabel
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             <div className="bubble-slot">
               <SpeechBubble claim={currentClaim} beginner={beginner} />
             </div>
           </div>
-
-          <Bench roles={RIGHT} side="r" state={state} />
         </div>
       </LayoutGroup>
     </div>
