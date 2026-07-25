@@ -20,6 +20,11 @@ window.requestAnimationFrame = window.requestAnimationFrame || ((cb) => cb());
 assert.match(html, /600519\.SH/);
 assert.match(html, /300750\.SZ/);
 assert.match(html, /601318\.SH/);
+assert.match(html, /rel="icon"/);
+assert.doesNotMatch(html, /仍在吵/);
+assert.doesNotMatch(html, /谁发言，谁走到前面/);
+assert.match(html, /face-player\[data-side="macro"\]:not\(\.is-active\)/);
+assert.match(html, /#bEngine,#bMode\{display:none\}/);
 for (const removed of ["AA" + "PL", "NV" + "DA", "TS" + "LA"]) {
   assert.doesNotMatch(html, new RegExp(removed));
 }
@@ -27,12 +32,21 @@ for (const removed of ["AA" + "PL", "NV" + "DA", "TS" + "LA"]) {
 let passed = 0;
 const ok = (name, cond) => { assert.ok(cond, name); console.log("  [PASS]", name); passed++; };
 
+ok("four large heads form the first-screen debate stage",
+   document.querySelectorAll("#faceStage .face-player").length === 4);
+ok("research details begin after the face stage",
+   document.getElementById("faceStage").compareDocumentPosition(document.getElementById("detailsStart")) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+
 // --- drive the streaming renderer directly (no network) --------------------
 window.handleEvent({ stage: "argue", symbol: "600519.SH" });
 ok("symbol badge set", document.getElementById("bSym").textContent === "600519.SH");
 ok("pipeline stage 'argue' lit", document.querySelector('.pstage[data-st="argue"]').className.includes("on"));
 
 const evidence = [{ skill: "skill-factor-ranking-sage", summary: "因子", metrics: { ic: 0.079, ir: 0.9, n_obs: 24 } }];
+const bullImage = document.querySelector('.face-player[data-side="bull"] .face-image');
+const bullFrames = [];
+const frameObserver = new window.MutationObserver(() => bullFrames.push(bullImage.getAttribute("src")));
+frameObserver.observe(bullImage, { attributes: true, attributeFilter: ["src"] });
 for (const side of ["bull", "bear", "macro", "risk"]) {
   window.handleEvent({
     stage: "claim", id: `${side}-1`, agent: side, side, confidence: 0.6,
@@ -43,9 +57,20 @@ for (const side of ["bull", "bear", "macro", "risk"]) {
 }
 ok("four agent panels rendered", document.querySelectorAll("#debate .agent").length === 4);
 ok("agent id matches claim id", !!document.getElementById("card-bull-1"));
+ok("one stage speaker comes forward", document.querySelectorAll("#faceStage .face-player.is-active").length === 1);
+ok("active speaker uses the speaking expression",
+   document.querySelector("#faceStage .face-player.is-active .face-image").getAttribute("src").endsWith("/bull-speaking.webp"));
+await new Promise(resolve => window.setTimeout(resolve, 12));
+frameObserver.disconnect();
+ok("speaking head cycles through multiple expression images",
+   Number(document.querySelector('.face-player[data-side="bull"]').dataset.frameTick) > 0 &&
+   new Set(bullFrames).size >= 2);
+ok("evidence cards stay compact below the stage", document.querySelectorAll("#debate .agent-avatar").length === 0);
 
 const bullHtml = document.getElementById("card-bull-1").innerHTML;
-ok("XSS payload escaped (no live <img)", !bullHtml.includes("<img") && bullHtml.includes("&lt;img"));
+ok("XSS payload escaped inside the compact evidence card",
+   document.querySelectorAll("#card-bull-1 img").length === 0 &&
+   !bullHtml.includes('src="x"') && bullHtml.includes("&lt;img"));
 ok("data-viz SVG rendered for metrics", document.querySelector("#card-bull-1 .viz svg") !== null);
 ok("IC metric labelled", bullHtml.includes("因子 IC"));
 ok("beginner 人话 in DOM", bullHtml.includes("bull 人话"));
@@ -96,6 +121,8 @@ window.handleEvent({
 });
 ok("disagreement tracks rendered", document.querySelectorAll("#dmap .track").length === 2);
 ok("open disagreement marked", document.querySelector("#dmap .track.opened") !== null);
+ok("finished research calls open items unresolved, not still running",
+   document.querySelector("#dmap .dpill.open").textContent.includes("未达成一致"));
 const longTrack = document.querySelector("#dmap .track");
 const longLabel = longTrack.querySelector(".lab");
 const trackStyle = window.getComputedStyle(longTrack);

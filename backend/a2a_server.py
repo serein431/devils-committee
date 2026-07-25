@@ -15,9 +15,11 @@ import hmac
 import json
 import logging
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import CONFIG
 from .orchestration import DebateOrchestrator, _extract_symbol
@@ -30,8 +32,10 @@ CARD_PATH = ROOT / "agent-card.json"
 if not CARD_PATH.exists():                      # card lives at repo root in this layout
     CARD_PATH = ROOT.parent / "agent-card.json"
 WEB_INDEX = ROOT.parent / "web" / "index.html"
+WEB_ASSETS = ROOT.parent / "web" / "assets"
 
 app = FastAPI(title="Devil's Committee A2A", version="0.2.0")
+app.mount("/assets", StaticFiles(directory=WEB_ASSETS), name="assets")
 
 
 # --- auth ------------------------------------------------------------------
@@ -80,20 +84,24 @@ def extract_topic(body: dict) -> str:
                 break
         if ok and isinstance(cur, str) and cur.strip():
             return cur
-    # A2A parts array: {"message": {"parts": [{"text": "..."}]}}
-    parts = body.get("message", {}).get("parts") if isinstance(body.get("message"), dict) else None
-    if isinstance(parts, list):
-        texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
-        joined = " ".join(t for t in texts if t)
-        if joined.strip():
-            return joined
+    for message in (
+        body.get("message"),
+        body.get("params", {}).get("message") if isinstance(body.get("params"), dict) else None,
+    ):
+        parts = message.get("parts") if isinstance(message, dict) else None
+        if isinstance(parts, list):
+            texts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+            joined = " ".join(text for text in texts if text)
+            if joined.strip():
+                return joined
     return ""
 
 
 def extract_research_request(body: dict) -> ResearchRequest:
     """Preserve structured research fields while accepting common A2A text shapes."""
 
-    payload = dict(body)
+    params = body.get("params")
+    payload = dict(params) if _is_legacy_jsonrpc(body) and isinstance(params, dict) else dict(body)
     topic = extract_topic(body)
     if topic and not payload.get("topic"):
         payload["topic"] = topic
@@ -102,6 +110,36 @@ def extract_research_request(body: dict) -> ResearchRequest:
 
 def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _is_legacy_jsonrpc(body: dict) -> bool:
+    request_id = body.get("id")
+    return (
+        body.get("jsonrpc") == "2.0"
+        and isinstance(request_id, (str, int))
+        and not isinstance(request_id, bool)
+    )
+
+
+def _jsonrpc_result(request_id: str | int, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _jsonrpc_error(request_id: str | int | None, code: int, message: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def _legacy_agent_message(payload: dict) -> dict:
+    return {
+        "kind": "message",
+        "role": "agent",
+        "messageId": str(uuid4()),
+        "parts": [{"kind": "text", "text": json.dumps(payload, ensure_ascii=False)}],
+    }
 
 
 @app.post("/a2a")
@@ -114,16 +152,25 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
         research_request = extract_research_request(body)
     except (TypeError, ValueError, json.JSONDecodeError):
         return JSONResponse(status_code=422, content={"detail": "invalid request"})
+    jsonrpc = _is_legacy_jsonrpc(body)
+    request_id = body.get("id") if jsonrpc else None
+    method = body.get("method") if jsonrpc else None
+    if jsonrpc and method not in {"message/send", "message/stream"}:
+        return JSONResponse(_jsonrpc_error(request_id, -32601, "method not found"))
     if not research_request.question:
+        if jsonrpc:
+            return JSONResponse(_jsonrpc_error(request_id, -32602, "no task/topic found in message"))
         raise HTTPException(status_code=422, detail="no task/topic found in message")
 
     wants_stream = (
-        "text/event-stream" in (request.headers.get("accept") or "")
+        (jsonrpc and method == "message/stream")
+        or "text/event-stream" in (request.headers.get("accept") or "")
         or request.query_params.get("stream") in ("1", "true")
         or bool(body.get("stream"))
     )
 
-    skill = body.get("skill", "debate_case")
+    params = body.get("params") if jsonrpc else None
+    skill = (params or {}).get("skill", "debate_case") if isinstance(params, dict) else body.get("skill", "debate_case")
 
     # Second advertised skill on the Agent Card — must actually work when called.
     if skill == "audit_claims":
@@ -131,8 +178,12 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
             result = await DebateOrchestrator().audit_claims(research_request)
         except Exception:
             log.exception("audit_claims failed")   # detail stays in server logs, not response
+            if jsonrpc:
+                return JSONResponse(_jsonrpc_error(request_id, -32603, "internal error"))
             return JSONResponse(status_code=500,
                                 content={"skill": "audit_claims", "error": "internal error"})
+        if jsonrpc:
+            return JSONResponse(_jsonrpc_result(request_id, _legacy_agent_message(result)))
         return JSONResponse({"skill": "audit_claims", "result": result})
 
     if not wants_stream:
@@ -140,8 +191,12 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
             result = await DebateOrchestrator().run(research_request)
         except Exception:                        # never leak internals to the A2A caller
             log.exception("debate failed")
+            if jsonrpc:
+                return JSONResponse(_jsonrpc_error(request_id, -32603, "internal error"))
             return JSONResponse(status_code=500,
                                 content={"skill": skill, "error": "internal error"})
+        if jsonrpc:
+            return JSONResponse(_jsonrpc_result(request_id, _legacy_agent_message(result.to_dict())))
         return JSONResponse({"skill": skill, "result": result.to_dict()})
 
     # Demo pacing: give a live audience the reveal drama; keep A2A-machine calls
@@ -152,6 +207,14 @@ async def a2a(request: Request, authorization: str | None = Header(default=None)
         pace = 0.35
 
     async def stream():
+        if jsonrpc:
+            try:
+                result = await DebateOrchestrator().run(research_request)
+                yield _sse(_jsonrpc_result(request_id, _legacy_agent_message(result.to_dict())))
+            except Exception:
+                log.exception("JSON-RPC stream failed")
+                yield _sse(_jsonrpc_error(request_id, -32603, "internal error"))
+            return
         orch = DebateOrchestrator()
         try:
             async for ev in orch.stream(research_request, pace=pace):

@@ -33,6 +33,16 @@ def test_healthz_always_ok():
     assert r.status_code == 200 and r.json()["ok"] is True
 
 
+def test_avatar_assets_are_served_as_webp():
+    for side in ("bull", "bear", "macro", "risk"):
+        for state in ("idle", "speaking", "emphasis"):
+            response = client.get(f"/assets/avatars/{side}-{state}.webp")
+            assert response.status_code == 200
+            assert response.headers["content-type"] == "image/webp"
+            assert response.content[:4] == b"RIFF"
+            assert response.content[8:12] == b"WEBP"
+
+
 def test_agent_card_served_and_url_injected():
     r = client.get("/.well-known/agent-card.json")
     assert r.status_code == 200
@@ -180,3 +190,69 @@ def test_sse_stream_yields_result_event():
         assert r.status_code == 200
         stages = [ln for ln in r.iter_lines() if '"stage"' in ln]
     assert any('"result"' in s for s in stages)
+
+
+def test_a2a_jsonrpc_message_send_returns_a_legacy_agent_message(monkeypatch):
+    async def fake_run(self, research_request):
+        assert research_request.question == "研究 600519.SH 的复权风险"
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    request_id = "rpc-send-001"
+    response = client.post("/a2a", json={
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "message/send",
+        "params": {
+            "message": {
+                "role": "user",
+                "messageId": "message-send-001",
+                "parts": [{"kind": "text", "text": "研究 600519.SH 的复权风险"}],
+            },
+        },
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["jsonrpc"] == "2.0"
+    assert payload["id"] == request_id
+    message = payload["result"]
+    assert message["kind"] == "message"
+    assert message["role"] == "agent"
+    assert message["messageId"]
+    assert message["parts"][0]["kind"] == "text"
+    assert "600519.SH" in message["parts"][0]["text"]
+
+
+def test_a2a_jsonrpc_stream_returns_a_terminal_legacy_agent_message(monkeypatch):
+    async def fake_run(self, research_request):
+        assert research_request.question == "研究 300750.SZ 的流动性风险"
+        return _minimal_result(research_request.symbol)
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "run", fake_run)
+    request_id = "rpc-stream-001"
+    with client.stream("POST", "/a2a", json={
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "role": "user",
+                "messageId": "message-stream-001",
+                "parts": [{"kind": "text", "text": "研究 300750.SZ 的流动性风险"}],
+            },
+        },
+    }) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        lines = [line for line in response.iter_lines() if line.startswith("data:")]
+
+    assert len(lines) == 1
+    event = json.loads(lines[0].removeprefix("data:").strip())
+    assert event["jsonrpc"] == "2.0"
+    assert event["id"] == request_id
+    message = event["result"]
+    assert message["kind"] == "message"
+    assert message["role"] == "agent"
+    assert message["parts"][0]["kind"] == "text"
+    assert "300750.SZ" in message["parts"][0]["text"]
