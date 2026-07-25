@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from .config import CONFIG
@@ -54,6 +55,17 @@ class MockLLM:
         if side == "risk":
             return f"抛开谁对谁错，我只报 {symbol} 的敞口：{joined}。这些是边界，不是判断——越界了再好的逻辑也得让路。"
         return f"{symbol}：{joined}。"
+
+    def argue_stream(
+        self,
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+    ) -> Iterator[str]:
+        """Keep the streaming contract available in offline mode."""
+
+        yield self.argue(side=side, symbol=symbol, evidence=evidence)
 
     def audit_reason(self, *, status: str, symbol: str, detail: dict[str, Any]) -> str:
         findings = [
@@ -123,7 +135,59 @@ class OpenAICompatLLM:
             )
             return "（模型说明暂不可用；请直接查看下方 Skill 结果、数据来源和风险提示。）"
 
-    def argue(self, *, side: str, symbol: str, evidence: list[dict[str, Any]]) -> str:
+    def _chat_stream(self, system: str, user: str) -> Iterator[str]:
+        body: dict[str, Any] = {
+            "model": CONFIG.llm_model,
+            "temperature": CONFIG.llm_temperature,
+            "stream": True,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        emitted = False
+        try:
+            with self._client.stream(
+                "POST",
+                "/chat/completions",
+                json=body,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if isinstance(line, bytes):
+                        line = line.decode("utf-8", errors="replace")
+                    line = str(line).strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    event = json.loads(payload)
+                    choices = event.get("choices") or []
+                    delta = choices[0].get("delta", {}) if choices else {}
+                    content = delta.get("content")
+                    if content:
+                        emitted = True
+                        yield str(content)
+            if not emitted:
+                raise ValueError("empty or malformed streaming LLM response")
+        except Exception as exc:
+            logging.getLogger("devils-committee").warning(
+                "Streaming LLM call failed: %s",
+                type(exc).__name__,
+            )
+            if emitted:
+                yield "（模型输出中断；请以下方完整证据为准。）"
+            else:
+                yield "（模型说明暂不可用；请直接查看下方 Skill 结果、数据来源和风险提示。）"
+
+    @staticmethod
+    def _argue_prompt(
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+    ) -> tuple[str, str]:
         p = PERSONAS[side]
         system = (
             f"你是投资辩论庭中的「{p['name']}」。风格：{p['voice']}。"
@@ -132,7 +196,29 @@ class OpenAICompatLLM:
             "用简体中文，3~5 句，口语但有据。"
         )
         user = f"标的：{symbol}\n量化证据（QuantSkills 输出）：\n{json.dumps(evidence, ensure_ascii=False, indent=2)}"
+        return system, user
+
+    def argue(self, *, side: str, symbol: str, evidence: list[dict[str, Any]]) -> str:
+        system, user = self._argue_prompt(
+            side=side,
+            symbol=symbol,
+            evidence=evidence,
+        )
         return self._chat(system, user)
+
+    def argue_stream(
+        self,
+        *,
+        side: str,
+        symbol: str,
+        evidence: list[dict[str, Any]],
+    ) -> Iterator[str]:
+        system, user = self._argue_prompt(
+            side=side,
+            symbol=symbol,
+            evidence=evidence,
+        )
+        yield from self._chat_stream(system, user)
 
     def audit_reason(self, *, status: str, symbol: str, detail: dict[str, Any]) -> str:
         system = (

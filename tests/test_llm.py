@@ -29,6 +29,28 @@ class _FakeClient:
         return _FakeResp("MOCKED_REPLY")
 
 
+class _FakeStreamResp:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"真实"}}]}'
+        yield 'data: {"choices":[{"delta":{"content":"增量"}}]}'
+        yield "data: [DONE]"
+
+
+class _FakeStreamingClient(_FakeClient):
+    def stream(self, method, url, json):  # noqa: A002 (mirror httpx signature)
+        self.calls.append((method, url, json))
+        return _FakeStreamResp()
+
+
 def _openai_without_network():
     """Build OpenAICompatLLM without running __init__ (no httpx/network)."""
     obj = llm.OpenAICompatLLM.__new__(llm.OpenAICompatLLM)
@@ -57,6 +79,32 @@ def test_argue_builds_persona_system_and_evidence_user(monkeypatch):
     assert "买入" in system or "荐股" in system    # persona forbids buy/sell advice
     assert "600519.SH" in user
     assert "skill-factor-ranking-sage" in user     # evidence JSON is passed through
+
+
+def test_argue_stream_forwards_real_sse_deltas(monkeypatch):
+    monkeypatch.setattr(
+        llm,
+        "CONFIG",
+        dataclasses.replace(llm.CONFIG, llm_model="test-model"),
+    )
+    o = llm.OpenAICompatLLM.__new__(llm.OpenAICompatLLM)
+    o._client = _FakeStreamingClient()
+    o._httpx = None
+
+    deltas = list(
+        o.argue_stream(
+            side="bull",
+            symbol="600519.SH",
+            evidence=[{"skill": "skill-factor-ranking-sage"}],
+        )
+    )
+
+    assert deltas == ["真实", "增量"]
+    method, url, body = o._client.calls[0]
+    assert method == "POST"
+    assert url == "/chat/completions"
+    assert body["stream"] is True
+    assert "600519.SH" in body["messages"][1]["content"]
 
 
 def test_audit_reason_uses_audit_persona_and_status():
@@ -154,7 +202,7 @@ def test_llm_failure_returns_structured_fallback_without_fake_numbers():
 
 
 def test_mock_and_openai_share_the_same_method_surface():
-    """Agents call these three methods; both backends must expose them identically."""
-    for name in ("argue", "audit_reason", "chair_line"):
+    """Both backends expose the same methods used by the agents."""
+    for name in ("argue", "argue_stream", "audit_reason", "chair_line"):
         assert callable(getattr(llm.MockLLM, name))
         assert callable(getattr(llm.OpenAICompatLLM, name))

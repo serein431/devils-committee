@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+from collections.abc import Awaitable, Callable, Iterator
 
 from .models import (
     AuditVerdict,
@@ -48,7 +50,11 @@ class _Base:
     def __init__(self, llm) -> None:
         self.llm = llm
 
-    async def argue(self, evidence: ResearchEvidence) -> list[Claim]:
+    async def argue(
+        self,
+        evidence: ResearchEvidence,
+        on_delta: Callable[[str], Awaitable[None] | None] | None = None,
+    ) -> list[Claim]:
         chosen = [
             evidence.results[skill_id]
             for skill_id in ROLE_SKILLS[self.side]
@@ -59,14 +65,41 @@ class _Base:
             return []
 
         insufficient = any(item.status != "success" for item in chosen)
-        text = await asyncio.to_thread(
-            self.llm.argue,
-            side=self.side,
-            symbol=evidence.request.symbol,
-            evidence=[item.to_dict() for item in items],
-        )
-        if insufficient:
-            text = f"证据不足：{text}"
+        public_evidence = [item.to_dict() for item in items]
+        if on_delta is None:
+            text = await asyncio.to_thread(
+                self.llm.argue,
+                side=self.side,
+                symbol=evidence.request.symbol,
+                evidence=public_evidence,
+            )
+            if insufficient:
+                text = f"证据不足：{text}"
+        else:
+            parts = []
+            if insufficient:
+                prefix = "证据不足："
+                parts.append(prefix)
+                await _call_delta(on_delta, prefix)
+            iterator = iter(
+                self.llm.argue_stream(
+                    side=self.side,
+                    symbol=evidence.request.symbol,
+                    evidence=public_evidence,
+                )
+            )
+            while True:
+                finished, delta = await asyncio.to_thread(
+                    _next_stream_delta,
+                    iterator,
+                )
+                if finished:
+                    break
+                if not delta:
+                    continue
+                parts.append(delta)
+                await _call_delta(on_delta, delta)
+            text = "".join(parts)
         return [
             Claim(
                 id=f"{self.side}-1",
@@ -78,6 +111,22 @@ class _Base:
                 skills_used=[item.skill_id for item in items],
             )
         ]
+
+
+def _next_stream_delta(iterator: Iterator[str]) -> tuple[bool, str]:
+    try:
+        return False, str(next(iterator))
+    except StopIteration:
+        return True, ""
+
+
+async def _call_delta(
+    callback: Callable[[str], Awaitable[None] | None],
+    delta: str,
+) -> None:
+    result = callback(delta)
+    if inspect.isawaitable(result):
+        await result
 
 
 class BullAgent(_Base):

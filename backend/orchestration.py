@@ -27,7 +27,6 @@ from .skills.runner import ResearchEvidence, SkillRunner
 GLOBAL_BUDGET_SEC = CONFIG.request_budget_sec
 PER_AGENT_TIMEOUT_SEC = 120
 MAX_AUDIT_ROUNDS = 1
-CLAIM_STREAM_CHARS = 12
 
 _PUBLIC_TIMEOUT = "研究请求超过内部时间限制。"
 _PUBLIC_DATA_ERROR = "研究数据暂不可用，请稍后重试。"
@@ -167,34 +166,65 @@ class DebateOrchestrator:
                 "msg": f"四个 Agent 就 {request.symbol} 并行研究…",
             }
             agents = [self.bull, self.bear, self.macro, self.risk]
-            tasks = [
-                asyncio.create_task(self._argue(agent, evidence, deadline))
-                for agent in agents
-            ]
             claims: list[Claim] = []
-            for task in asyncio.as_completed(tasks):
+            for agent in agents:
+                delta_queue: asyncio.Queue[str | object] = asyncio.Queue()
+                stream_finished = object()
+
+                async def collect_agent(current=agent):
+                    try:
+                        return await self._argue(
+                            current,
+                            evidence,
+                            deadline,
+                            on_delta=delta_queue.put,
+                        )
+                    finally:
+                        await delta_queue.put(stream_finished)
+
+                task = asyncio.create_task(collect_agent())
+                announced = False
+                while True:
+                    delta = await asyncio.wait_for(
+                        delta_queue.get(),
+                        timeout=_require_remaining(deadline),
+                    )
+                    if delta is stream_finished:
+                        break
+                    if not announced:
+                        yield {
+                            "stage": "claim_start",
+                            "id": f"{agent.side}-1",
+                            "agent": agent.__class__.__name__.removesuffix("Agent"),
+                            "side": agent.side,
+                        }
+                        announced = True
+                    yield {
+                        "stage": "claim_delta",
+                        "id": f"{agent.side}-1",
+                        "agent": agent.__class__.__name__.removesuffix("Agent"),
+                        "side": agent.side,
+                        "delta": delta,
+                    }
+
                 side_claims = await task
                 for claim in side_claims:
                     claim.plain = plain_claim(claim.side)
                     claims.append(claim)
-                    yield {
-                        "stage": "claim_start",
-                        "id": claim.id,
-                        "agent": claim.agent,
-                        "side": claim.side,
-                    }
-                    for delta in _claim_stream_chunks(claim.text):
+                    if not announced:
+                        yield {
+                            "stage": "claim_start",
+                            "id": claim.id,
+                            "agent": claim.agent,
+                            "side": claim.side,
+                        }
                         yield {
                             "stage": "claim_delta",
                             "id": claim.id,
                             "agent": claim.agent,
                             "side": claim.side,
-                            "delta": delta,
+                            "delta": claim.text,
                         }
-                        await _pace_within_budget(
-                            min(pace, 0.035),
-                            deadline,
-                        )
                     yield {
                         "stage": "claim",
                         "id": claim.id,
@@ -299,6 +329,7 @@ class DebateOrchestrator:
         agent,
         evidence: ResearchEvidence,
         deadline: float,
+        on_delta=None,
     ) -> list[Claim]:
         """Return no claims when one agent times out or fails privately."""
 
@@ -306,7 +337,11 @@ class DebateOrchestrator:
         if timeout <= 0:
             return []
         try:
-            return await asyncio.wait_for(agent.argue(evidence), timeout=timeout)
+            if on_delta is None:
+                call = agent.argue(evidence)
+            else:
+                call = agent.argue(evidence, on_delta=on_delta)
+            return await asyncio.wait_for(call, timeout=timeout)
         except Exception as exc:
             _log_failure(
                 f"agent {getattr(agent, 'side', '?')}",
@@ -531,14 +566,6 @@ def _evidence_modes(evidence: ResearchEvidence) -> list[str]:
     modes.update(result.mode for result in evidence.results.values())
     allowed = {"live", "cache", "precomputed", "mock"}
     return sorted(mode for mode in modes if mode in allowed)
-
-
-def _claim_stream_chunks(text: str, size: int = CLAIM_STREAM_CHARS) -> list[str]:
-    """Split one public claim into short, ordered SSE fragments."""
-
-    if not text:
-        return []
-    return [text[index:index + size] for index in range(0, len(text), size)]
 
 
 def _as_request(topic: str | ResearchRequest) -> ResearchRequest:

@@ -205,6 +205,60 @@ def test_stream_emits_detailed_claim_text_as_ordered_deltas(
         assert claim["plain"] not in "".join(streamed[claim_id])
 
 
+def test_stream_forwards_llm_deltas_in_speaker_order(
+    monkeypatch,
+    evidence_fixture,
+):
+    from backend import orchestration
+
+    class StreamingLLM:
+        mode = "openai"
+
+        def argue(self, **kwargs):
+            return "这段整句回放不应出现"
+
+        def argue_stream(self, *, side, symbol, evidence):
+            yield f"{side}:真实-"
+            yield "增量"
+
+        def audit_reason(self, **kwargs):
+            return "审计完成"
+
+        def chair_line(self, **kwargs):
+            return "主持完成"
+
+    async def prepare(self, request):
+        return evidence_fixture
+
+    async def collect_events():
+        return [
+            event
+            async for event in DebateOrchestrator().stream(
+                "600519 多空",
+                pace=0,
+            )
+        ]
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    monkeypatch.setattr(orchestration, "get_llm", lambda: StreamingLLM())
+    events = asyncio.run(collect_events())
+
+    starts = [event["side"] for event in events if event.get("stage") == "claim_start"]
+    assert starts == ["bull", "bear", "macro", "risk"]
+    for side in starts:
+        deltas = [
+            event["delta"]
+            for event in events
+            if event.get("stage") == "claim_delta" and event.get("side") == side
+        ]
+        assert deltas == [f"{side}:真实-", "增量"]
+        assert "".join(deltas) == next(
+            event["text"]
+            for event in events
+            if event.get("stage") == "claim" and event.get("side") == side
+        )
+
+
 def test_skills_manifest_lists_real_result_contract(monkeypatch, evidence_fixture):
     async def prepare(self, request):
         return evidence_fixture

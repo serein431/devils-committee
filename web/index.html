@@ -112,8 +112,15 @@
     opacity:0;border:1px solid color-mix(in srgb,var(--speaker-color,var(--accent)) 48%,var(--line2));border-radius:8px;
     background:rgba(10,12,13,.92);backdrop-filter:blur(12px);padding:12px 15px;
     box-shadow:0 16px 45px rgba(0,0,0,.28);transition:opacity .28s ease,transform .45s ease}
-  .face-stage.is-debating .stage-speech{opacity:1;transform:translate(-50%,0)}
-  .stage-speaker{display:block;color:var(--speaker-color,var(--accent));font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:4px}
+  .face-stage.is-debating .stage-speech,.face-stage.is-complete .stage-speech{opacity:1;transform:translate(-50%,0)}
+  .stage-speech-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px}
+  .stage-speaker{display:block;color:var(--speaker-color,var(--accent));font-size:11px;font-weight:700;letter-spacing:1px}
+  .stage-stream-tools{display:flex;align-items:center;gap:6px}
+  .stage-stream-tools button{appearance:none;border:1px solid var(--line2);border-radius:999px;background:var(--panel2);
+    color:var(--sub);padding:3px 8px;font:10px/1.25 var(--mono);cursor:pointer;transition:.18s ease}
+  .stage-stream-tools button:hover:not(:disabled){color:var(--ink);border-color:var(--speaker-color,var(--accent))}
+  .stage-stream-tools button:disabled{opacity:.38;cursor:default}
+  .stage-stream-tools button.is-on{color:var(--speaker-color,var(--accent));border-color:var(--speaker-color,var(--accent))}
   .stage-quote{margin:0;font-family:var(--sans);font-size:14px;line-height:1.62;color:var(--ink);min-height:3.2em;
     max-height:138px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;scrollbar-width:thin}
   .stage-quote[data-streaming="true"]::after{content:"▋";color:var(--speaker-color,var(--accent));margin-left:2px;
@@ -143,6 +150,7 @@
     .face-stage.is-debating .face-player[data-side="macro"]:not(.is-active){left:14%;top:67%}
     .face-stage.is-debating .face-player[data-side="risk"]:not(.is-active){left:86%;top:67%}
     .stage-speech{bottom:2px;width:94%;padding:9px 11px}.stage-quote{font-size:12.5px;max-height:116px;min-height:3em}
+    .stage-stream-tools button{padding:3px 7px;font-size:9px}
     .stage-controls{padding-bottom:12px}.stage-controls .cmd{padding:8px 9px}.stage-controls .cmd button{padding:8px 11px}
     .stage-controls .chips{display:none}.scroll-cue{margin-top:8px}
   }
@@ -304,7 +312,13 @@
         <span class="face-name">RISK <small>风控</small></span>
       </div>
       <div class="stage-speech" id="stageSpeech" aria-live="polite">
-        <span class="stage-speaker" id="stageSpeaker">等待开庭</span>
+        <div class="stage-speech-head">
+          <span class="stage-speaker" id="stageSpeaker">等待开庭</span>
+          <span class="stage-stream-tools">
+            <button id="stagePause" type="button" disabled>暂停</button>
+            <button id="stageRevealAll" type="button" disabled>显示完整</button>
+          </span>
+        </div>
         <p class="stage-quote" id="stageQuote">输入一个 A 股研究问题，看四个角色轮流提出证据和反驳。</p>
       </div>
     </div>
@@ -392,11 +406,13 @@ const STAGE_FRAMES={
 const IS_JSDOM=/jsdom/i.test(navigator.userAgent);
 const STAGE_TURN_MS=IS_JSDOM?30:2200;
 const STAGE_FRAME_MS=IS_JSDOM?2:260;
+const STREAM_CHAR_MS=IS_JSDOM?1:52;
 const avatarPreloads=[];
 AVATAR_SIDES.forEach(side=>AVATAR_STATES.forEach(state=>{
   const image=new Image();image.src=avatarSrc(side,state);avatarPreloads.push(image);
 }));
 let stageQueue=[],stageBusy=false,stageTimer=0,stageFrameTimer=0,stageFinished=false,stageStreamId="";
+let streamPaused=false,streamRevealAll=false,streamPauseWaiters=[];
 const STA={selection_bias:["选择偏差","SELECTION-BIAS","crit"],suspected_overfit:["过拟合","OVERFIT","serious"],
   bad_data:["坏数据","BAD-DATA","serious"],thin_data:["样本不足","THIN-DATA","warn"],
   missing_evidence:["资料缺失","MISSING-EVIDENCE","warn"],pass:["通过","PASS","good"]};
@@ -458,6 +474,31 @@ function stopStageFrames(setIdle=false){
   player.querySelector(".face-image").src=avatarSrc(player.dataset.side,"idle");
   player.dataset.frameState="idle";
 }
+function releaseStreamPause(){
+  const waiters=streamPauseWaiters.splice(0);waiters.forEach(resolve=>resolve());
+}
+function resetStreamControls(active=false){
+  streamPaused=false;streamRevealAll=false;releaseStreamPause();
+  const pause=$("#stagePause"),reveal=$("#stageRevealAll");
+  pause.disabled=!active;pause.textContent="暂停";pause.classList.remove("is-on");
+  reveal.disabled=!active;reveal.textContent="显示完整";reveal.classList.remove("is-on");
+}
+function setStreamPaused(paused){
+  if(!stageStreamId)return;
+  streamPaused=paused;
+  const button=$("#stagePause");button.textContent=paused?"继续":"暂停";button.classList.toggle("is-on",paused);
+  if(!paused)releaseStreamPause();
+}
+function revealCompleteStream(){
+  if(!stageStreamId)return;
+  streamRevealAll=true;setStreamPaused(false);
+  const button=$("#stageRevealAll");button.textContent="已显示完整";button.classList.add("is-on");button.disabled=true;
+}
+async function waitForStreamResume(){
+  while(streamPaused&&!streamRevealAll){
+    await new Promise(resolve=>streamPauseWaiters.push(resolve));
+  }
+}
 function startStageFrames(player,state){
   stopStageFrames();
   const frames=STAGE_FRAMES[state]||STAGE_FRAMES.speaking;
@@ -474,7 +515,7 @@ function startStageFrames(player,state){
 }
 function resetStage(finalText=false){
   stopStageFrames();
-  const stage=$("#faceStage");stage.classList.remove("is-debating","is-settled");delete stage.dataset.active;
+  const stage=$("#faceStage");stage.classList.remove("is-debating","is-complete","is-settled");delete stage.dataset.active;
   document.querySelectorAll(".face-player").forEach(player=>{
     player.classList.remove("is-active");
     player.querySelector(".face-image").src=avatarSrc(player.dataset.side,"idle");
@@ -482,6 +523,7 @@ function resetStage(finalText=false){
   });
   stage.style.removeProperty("--speaker-color");
   stageStreamId="";
+  resetStreamControls(false);
   $("#stageSpeaker").textContent=finalText?"四方发言结束":"等待开庭";
   const quote=$("#stageQuote");quote.dataset.streaming="false";delete quote.dataset.claimId;
   quote.textContent=finalText?"向下滑动，查看每条论据、审计结果和没有达成一致的地方。":"输入一个 A 股研究问题，看四个角色轮流提出证据和反驳。";
@@ -507,23 +549,43 @@ function showStageTurn(turn){
 }
 function startStageStream(item){
   clearTimeout(stageTimer);stageQueue=[];stageBusy=true;stageStreamId=item.id;
-  $("#faceStage").classList.remove("is-settled");
+  $("#faceStage").classList.remove("is-complete","is-settled");
   showStageTurn({side:item.side,state:"speaking",text:""});
   const quote=$("#stageQuote");quote.textContent="";quote.dataset.streaming="true";quote.dataset.claimId=item.id;
+  resetStreamControls(true);
 }
-function appendStageStream(item){
+async function appendStageStream(item){
   if(stageStreamId!==item.id)return;
-  const quote=$("#stageQuote");quote.textContent+=String(item.delta||"");quote.scrollTop=quote.scrollHeight;
+  const quote=$("#stageQuote"),chars=Array.from(String(item.delta||""));
+  for(let index=0;index<chars.length;index++){
+    await waitForStreamResume();
+    if(stageStreamId!==item.id)return;
+    if(streamRevealAll){
+      quote.textContent+=chars.slice(index).join("");quote.scrollTop=quote.scrollHeight;return;
+    }
+    const char=chars[index];quote.textContent+=char;quote.scrollTop=quote.scrollHeight;
+    const pause=/[。！？；]/.test(char)?STREAM_CHAR_MS*2.4:STREAM_CHAR_MS;
+    await new Promise(resolve=>setTimeout(resolve,pause));
+  }
 }
 function completeStageStream(item){
   if(stageStreamId!==item.id)return false;
-  $("#stageQuote").dataset.streaming="false";stageStreamId="";stageBusy=false;return true;
+  $("#stageQuote").dataset.streaming="false";stageStreamId="";stageBusy=false;resetStreamControls(false);return true;
+}
+function returnStagePlayers(speakerText){
+  stopStageFrames();
+  const stage=$("#faceStage");stage.classList.remove("is-debating");stage.classList.add("is-complete");delete stage.dataset.active;
+  document.querySelectorAll(".face-player").forEach(player=>{
+    player.classList.remove("is-active");player.querySelector(".face-image").src=avatarSrc(player.dataset.side,"idle");
+    player.dataset.frameState="idle";
+  });
+  const quote=$("#stageQuote");quote.dataset.streaming="false";
+  if(speakerText)$("#stageSpeaker").textContent=speakerText;
+  stageStreamId="";stageBusy=false;resetStreamControls(false);
 }
 function settleStage(){
-  stopStageFrames(true);stageBusy=false;
-  const stage=$("#faceStage"),quote=$("#stageQuote"),speaker=$("#stageSpeaker");
-  stage.classList.add("is-debating","is-settled");quote.dataset.streaming="false";
-  if(!speaker.textContent.includes("发言结束"))speaker.textContent+=` · 发言结束`;
+  returnStagePlayers("四方发言结束");
+  $("#faceStage").classList.add("is-settled");
 }
 function playStageQueue(){
   if(stageBusy)return;
@@ -546,13 +608,14 @@ function handleEvent(ev){
       $("#bSym").textContent=ev.symbol||"—";$("#bLive").textContent="LIVE";
       lightPipe("argue");setStage("四个 Agent 就该标的并行取证",true);return;
     case "claim_start":startStageStream(ev);setStage(`${(SIDE[ev.side]||[ev.agent])[0]} 正在陈述详细论据`,true);return;
-    case "claim_delta":appendStageStream(ev);return;
+    case "claim_delta":return appendStageStream(ev);
     case "claim":{
       const el=renderAgent(ev);$("#debate").appendChild(el);requestAnimationFrame(()=>el.classList.add("in"));
       if(!completeStageStream(ev))queueStageTurn(ev,"speaking");
       setStage(`${(SIDE[ev.side]||[ev.agent])[0]} 甩出证据`,true);return;}
     case "audit":
       lightPipe("argue",true);lightPipe("audit");$("#auditSec").classList.remove("hidden");
+      returnStagePlayers("四方发言结束 · 审计中");
       setStage("审计 Agent 独立复核每一条论据",true);return;
     case "audit_flag":{flags++;renderVerdict(ev,false);
       const c=document.getElementById("card-"+ev.claim_id);if(c)c.classList.add("flag-slam");
@@ -687,14 +750,14 @@ async function run(){
     const rd=res.body.getReader(),dec=new TextDecoder();let buf="";
     while(true){const{value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
       let i;while((i=buf.indexOf("\n\n"))>=0){const ln=buf.slice(0,i).split("\n").find(l=>l.startsWith("data:"));buf=buf.slice(i+2);
-        if(ln)handleEvent(JSON.parse(ln.slice(5).trim()));}}
+        if(ln)await handleEvent(JSON.parse(ln.slice(5).trim()));}}
   }catch(e){
     const r=await fetch("/a2a",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:q})});
     const d=(await r.json()).result;
-    handleEvent({stage:"argue",symbol:(d.meta||{}).symbol});
-    (d.claims||[]).forEach(c=>handleEvent({stage:"claim",...c}));
-    handleEvent({stage:"audit"});(d.audit_flags||[]).forEach(v=>handleEvent({stage:"audit_flag",...v}));
-    handleEvent({stage:"synthesize"});handleEvent({stage:"result",result:d});
+    await handleEvent({stage:"argue",symbol:(d.meta||{}).symbol});
+    for(const c of (d.claims||[]))await handleEvent({stage:"claim",...c});
+    await handleEvent({stage:"audit"});for(const v of (d.audit_flags||[]))await handleEvent({stage:"audit_flag",...v});
+    await handleEvent({stage:"synthesize"});await handleEvent({stage:"result",result:d});
   }
   $("#go").disabled=false;
 }
@@ -703,6 +766,8 @@ async function run(){
 function setMode(beg){document.body.classList.toggle("beginner",beg);
   $("#mBeg").classList.toggle("on",beg);$("#mExp").classList.toggle("on",!beg);}
 $("#mBeg").onclick=()=>setMode(true);$("#mExp").onclick=()=>setMode(false);setMode(false);
+$("#stagePause").onclick=()=>setStreamPaused(!streamPaused);
+$("#stageRevealAll").onclick=revealCompleteStream;
 
 const EX=[
   "600519.SH 复权、分红、因子和流动性风险",

@@ -32,7 +32,18 @@ def _install_fake_openai(monkeypatch):
         role = "audit" if "审计" in system else ("chair" if "主持" in system else "argue")
         return f"[OPENAI:{role}] canned reply {calls['n']}"
 
+    def fake_chat_stream(self, system, user):
+        calls["n"] += 1
+        yield "[OPENAI:argue] "
+        yield f"canned reply {calls['n']}"
+
     monkeypatch.setattr(llm_mod.OpenAICompatLLM, "_chat", fake_chat, raising=True)
+    monkeypatch.setattr(
+        llm_mod.OpenAICompatLLM,
+        "_chat_stream",
+        fake_chat_stream,
+        raising=True,
+    )
     return calls
 
 

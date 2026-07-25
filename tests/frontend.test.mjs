@@ -36,11 +36,38 @@ ok("four large heads form the first-screen debate stage",
    document.querySelectorAll("#faceStage .face-player").length === 4);
 ok("research details begin after the face stage",
    document.getElementById("faceStage").compareDocumentPosition(document.getElementById("detailsStart")) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+ok("stream controls include pause and show-all",
+   document.getElementById("stagePause") && document.getElementById("stageRevealAll"));
 
 // --- drive the streaming renderer directly (no network) --------------------
 window.handleEvent({ stage: "argue", symbol: "600519.SH" });
 ok("symbol badge set", document.getElementById("bSym").textContent === "600519.SH");
 ok("pipeline stage 'argue' lit", document.querySelector('.pstage[data-st="argue"]').className.includes("on"));
+
+window.handleEvent({ stage: "claim_start", id: "control-1", agent: "bull", side: "bull" });
+document.getElementById("stagePause").click();
+const pausedText = document.getElementById("stageQuote").textContent;
+const pausedAppend = window.handleEvent({
+  stage: "claim_delta", id: "control-1", agent: "bull", side: "bull",
+  delta: "暂停时不应继续播放",
+});
+await new Promise(resolve => window.setTimeout(resolve, 8));
+ok("pause stops visible text growth",
+   document.getElementById("stageQuote").textContent === pausedText &&
+   document.getElementById("stagePause").textContent.includes("继续"));
+document.getElementById("stagePause").click();
+await pausedAppend;
+ok("continue resumes visible text growth",
+   document.getElementById("stageQuote").textContent.includes("暂停时不应继续播放"));
+
+window.handleEvent({ stage: "claim_start", id: "control-2", agent: "bear", side: "bear" });
+document.getElementById("stageRevealAll").click();
+await window.handleEvent({
+  stage: "claim_delta", id: "control-2", agent: "bear", side: "bear",
+  delta: "点击后立即显示这一整段文字",
+});
+ok("show-all reveals the complete pending delta",
+   document.getElementById("stageQuote").textContent === "点击后立即显示这一整段文字");
 
 const evidence = [{ skill: "skill-factor-ranking-sage", summary: "因子", metrics: { ic: 0.079, ir: 0.9, n_obs: 24 } }];
 const stageFrames = [];
@@ -54,11 +81,11 @@ for (const side of ["bull", "bear", "macro", "risk"]) {
   window.handleEvent({
     stage: "claim_start", id: `${side}-1`, agent: side, side,
   });
-  window.handleEvent({
+  await window.handleEvent({
     stage: "claim_delta", id: `${side}-1`, agent: side, side,
     delta: `${side} 具体论据第一段；`,
   });
-  window.handleEvent({
+  await window.handleEvent({
     stage: "claim_delta", id: `${side}-1`, agent: side, side,
     delta: `${side} 具体论据第二段。`,
   });
@@ -76,8 +103,9 @@ ok("first screen streams the detailed claim instead of beginner copy",
    document.getElementById("stageQuote").textContent.includes("具体论据") &&
    !document.getElementById("stageQuote").textContent.includes("人话"));
 const activeSpeaker = document.querySelector("#faceStage .face-player.is-active");
-ok("active speaker uses its speaking expression",
-   activeSpeaker.querySelector(".face-image").getAttribute("src").endsWith(`/${activeSpeaker.dataset.side}-speaking.webp`));
+ok("active speaker uses one of its animated speaking frames",
+   ["speaking", "emphasis", "idle"].includes(activeSpeaker.dataset.frameState) &&
+   activeSpeaker.querySelector(".face-image").getAttribute("src").includes(`/${activeSpeaker.dataset.side}-`));
 await new Promise(resolve => window.setTimeout(resolve, 12));
 frameObserver.disconnect();
 ok("speaking head cycles through multiple expression images",
@@ -95,6 +123,12 @@ ok("beginner 人话 in DOM", bullHtml.includes("bull 人话"));
 // audit catches bull-1 via the REAL cli auditor
 window.handleEvent({ stage: "audit" });
 ok("audit console revealed", !document.getElementById("auditSec").className.includes("hidden"));
+ok("audit returns all four heads to their original positions",
+   document.querySelectorAll("#faceStage .face-player.is-active").length === 0 &&
+   !document.getElementById("faceStage").classList.contains("is-debating"));
+ok("audit keeps the latest detailed statement visible",
+   document.getElementById("faceStage").classList.contains("is-complete") &&
+   document.getElementById("stageQuote").textContent.includes("具体论据"));
 window.handleEvent({
   stage: "audit_flag", claim_id: "bull-1", status: "selection_bias", severity: "high",
   reason: "小样本高IC，像挑赢家来吹", remediation: "改用全域", plain: "只挑高分同学",
@@ -169,6 +203,9 @@ await new Promise(resolve => window.setTimeout(resolve, 40));
 ok("first screen keeps the last detailed statement after completion",
    document.getElementById("stageQuote").textContent.includes("关键状态数据缺失") &&
    !document.getElementById("stageQuote").textContent.includes("向下滑动"));
+ok("completion does not freeze the last speaker in front",
+   document.querySelectorAll("#faceStage .face-player.is-active").length === 0 &&
+   !document.getElementById("faceStage").classList.contains("is-debating"));
 
 // view toggle: expert is default, beginner toggles
 ok("expert mode is default (not beginner)", !document.body.classList.contains("beginner"));
