@@ -420,17 +420,23 @@ def collect_result(
         selected_path = _newest_file(raw_root, "selected_factors.json")
         run_dir = selected_path.parent
         selected = _read_json_file(selected_path)
-        run_manifest = _read_json_file(run_dir / "run_manifest.json")
+        # The factor skill records the aligned panel size in
+        # input_manifest.json under data.num_rows (see reporter.write_artifacts
+        # / data_adapter.metadata) — not in selected_factors.json or a
+        # run_manifest.json. Read the real observation count from there so the
+        # published report does not claim n_obs=0 on a full data run.
+        input_manifest = _read_json_file(run_dir / "input_manifest.json")
+        manifest_data = input_manifest.get("data")
+        n_obs = 0
+        if isinstance(manifest_data, dict):
+            n_obs = int(manifest_data.get("num_rows", 0) or 0)
         selected_factors = selected.get("selected_factors")
         if not isinstance(selected_factors, list) or not selected_factors:
             raise RuntimeError("QuantSkills result unavailable")
         payload = {
             "selected_factors": selected_factors,
             "metrics": {
-                "n_obs": selected.get(
-                    "n_obs",
-                    run_manifest.get("num_rows", 0),
-                ),
+                "n_obs": n_obs,
                 "train_start": "20240101",
                 "train_end": "20250131",
                 "valid_start": "20250213",

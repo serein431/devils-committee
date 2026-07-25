@@ -387,11 +387,14 @@ def test_collect_result_keeps_symbol_universe_and_hashes_universe_file(tmp_path,
     raw = tmp_path / FACTOR_SKILL / "raw" / "run-1"
     raw.mkdir(parents=True)
     (raw / "selected_factors.json").write_text(
-        json.dumps({"selected_factors": ["x"], "n_obs": 1}),
+        json.dumps({"selected_factors": ["x"]}),
         encoding="utf-8",
     )
-    (raw / "run_manifest.json").write_text(
-        json.dumps({"num_rows": 1}),
+    # The real factor skill records the aligned panel size in
+    # input_manifest.json under data.num_rows (see reporter.write_artifacts),
+    # not in selected_factors.json — collect_result reads n_obs from there.
+    (raw / "input_manifest.json").write_text(
+        json.dumps({"data": {"num_rows": 1}}),
         encoding="utf-8",
     )
 

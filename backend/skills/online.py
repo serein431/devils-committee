@@ -88,8 +88,15 @@ def report_to_result(
     dataset_hashes: list[str],
     assumptions: list[str] | None = None,
     forced_warning: str = "",
+    advisory_warning: str = "",
 ) -> SkillResult:
-    """Convert a QuantSkills report without turning missing evidence into success."""
+    """Convert a QuantSkills report without turning missing evidence into success.
+
+    ``forced_warning`` marks evidence that is genuinely missing, so the result is
+    downgraded to insufficient-evidence. ``advisory_warning`` is a caveat about an
+    otherwise-complete analysis (e.g. a fallback field) — it is surfaced to the
+    reader but does not overturn the skill's own status.
+    """
     raw_status = report.get("status")
     if raw_status == "insufficient-evidence" or forced_warning:
         status = "insufficient-evidence"
@@ -121,6 +128,8 @@ def report_to_result(
     warnings = [str(item) for item in report.get("limitations", []) or []]
     if forced_warning:
         warnings.append(forced_warning)
+    if advisory_warning:
+        warnings.append(advisory_warning)
     metrics = report.get("metrics") or report.get("input_summary") or {}
     return SkillResult(
         skill_id=skill_id,
@@ -217,6 +226,19 @@ def _date_key(value: Any) -> str:
     if len(raw) >= 10 and raw[4] in "-/" and raw[7] in "-/":
         return f"{raw[:4]}{raw[5:7]}{raw[8:10]}"
     return raw[:8]
+
+
+def _iso_date(value: Any) -> str:
+    """Render a date as YYYY-MM-DD, the format the event-study skill requires.
+
+    Accepts the internal 8-digit key (YYYYMMDD) or already-hyphenated input;
+    returns "" when the value is not a usable 8-digit date so callers can apply
+    their own fallback instead of feeding the skill an invalid_event_date row.
+    """
+    key = _date_key(value)
+    if len(key) == 8 and key.isdigit():
+        return f"{key[:4]}-{key[4:6]}-{key[6:8]}"
+    return ""
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -490,11 +512,30 @@ def _event_rows(
         announcement_date = _date_key(_first(row, "announcement_date"))
         if not announcement_date:
             announcement_incomplete = True
+        # The event-study skill demands YYYY-MM-DD dates, one of its three
+        # actions {add, delete, weight_change}, and announcement <= effective.
+        # PandaData index weights carry none of these directly, so translate a
+        # weight delta into the skill's vocabulary instead of feeding it
+        # unsupported_action / invalid_event_date rows.
+        raw_action = str(_first(row, "action", "change_type", default="")).strip()
+        if raw_action not in {"add", "delete", "weight_change"}:
+            raw_action = "weight_change"
+        effective_iso = _iso_date(effective_date)
+        # Fall back to the effective date when no announcement is published;
+        # the skill only requires announcement <= effective, and equal dates
+        # satisfy that without inventing an earlier timestamp.
+        announcement_iso = _iso_date(announcement_date) or effective_iso
         for offset in range(-5, 6):
             date_index = event_index + offset
             if not 0 <= date_index < len(trading_dates):
                 continue
             date = trading_dates[date_index]
+            # Skip window edges where a daily return cannot be computed (the
+            # first day of each price series has no prior close). Feeding the
+            # skill an empty string there trips its strict numeric validation
+            # (invalid_numeric) and sinks an otherwise usable event study.
+            if date not in stock_returns or date not in benchmark_returns:
+                continue
             baseline = [value for value in stock_volume.values() if value > 0]
             average_volume = sum(baseline) / len(baseline) if baseline else 0.0
             volume_ratio = (
@@ -506,17 +547,12 @@ def _event_rows(
                 {
                     "event_id": event_id,
                     "symbol": request.symbol,
-                    "action": _first(
-                        row,
-                        "action",
-                        "change_type",
-                        default="add" if current_weight > before else "remove",
-                    ),
-                    "announcement_date": announcement_date,
-                    "effective_date": effective_date,
+                    "action": raw_action,
+                    "announcement_date": announcement_iso,
+                    "effective_date": effective_iso,
                     "relative_day": offset,
-                    "return": stock_returns.get(date, ""),
-                    "benchmark_return": benchmark_returns.get(date, ""),
+                    "return": stock_returns[date],
+                    "benchmark_return": benchmark_returns[date],
                     "volume_ratio": volume_ratio,
                     "weight_before": before,
                     "weight_after": current_weight,
@@ -568,6 +604,7 @@ class OnlineSkillRunner:
         columns: list[str],
         assumptions: list[str] | None = None,
         forced_warning: str = "",
+        advisory_warning: str = "",
     ) -> SkillResult:
         if not rows:
             return SkillResult(
@@ -591,6 +628,7 @@ class OnlineSkillRunner:
             bundle.dataset_hashes,
             assumptions=assumptions,
             forced_warning=forced_warning,
+            advisory_warning=advisory_warning,
         )
 
     def run_adjustments(
@@ -648,12 +686,17 @@ class OnlineSkillRunner:
         self, request: ResearchRequest, bundle: MarketDataBundle
     ) -> SkillResult:
         rows, warning = _event_rows(request, bundle)
+        # A missing announcement date is a provenance caveat, not missing
+        # evidence: the event study still runs on effective-date windows. Pass
+        # it as an advisory so a completed analysis is not blanked to
+        # insufficient-evidence. Genuinely empty input still downgrades via the
+        # no-rows branch in _run.
         return self._run(
             "skill-index-rebalance-event-study",
             bundle,
             rows,
             EVENT_COLUMNS,
-            forced_warning=warning,
+            advisory_warning=warning,
         )
 
     async def run_all(

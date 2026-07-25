@@ -8,7 +8,7 @@
     "volume"
   ],
   "metrics": {
-    "n_obs": 0,
+    "n_obs": 6106,
     "train_start": "20240101",
     "train_end": "20250131",
     "valid_start": "20250213",
