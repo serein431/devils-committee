@@ -1,0 +1,18 @@
+{
+  "selected_factors": [
+    "amount",
+    "open",
+    "market_cap",
+    "close",
+    "turnover",
+    "volume"
+  ],
+  "metrics": {
+    "n_obs": 0,
+    "train_start": "20240101",
+    "train_end": "20250131",
+    "valid_start": "20250213",
+    "valid_end": "20251231"
+  },
+  "warnings": []
+}

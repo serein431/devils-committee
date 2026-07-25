@@ -1,0 +1,43 @@
+{
+  "best_params": {
+    "model_type": "lgbm",
+    "selected_by": "score_best",
+    "trial_id": "lgbm_trial_0003",
+    "score_best_trial_id": "lgbm_trial_0003",
+    "score_best_score": 0.1822853001243774,
+    "objective": "rankic_ir",
+    "score": 0.1822853001243774,
+    "search_score": 0.1822853001243774,
+    "confirmation_score": null,
+    "confirmation": {
+      "enabled": false
+    },
+    "loss": -0.1822853001243774,
+    "valid_rmse": 0.04480790761351236,
+    "valid_mae": 0.033339887360991784,
+    "valid_r2": -1.1953709288393313,
+    "fast_score": 0.12819622319088275,
+    "final_selection": {
+      "enabled": false
+    },
+    "params": {
+      "num_leaves": 63,
+      "learning_rate": 0.07725185257170397,
+      "n_estimators": 200,
+      "subsample": 0.8330242596481994,
+      "colsample_bytree": 0.7681716165354331,
+      "objective": "regression",
+      "metric": "rmse",
+      "n_jobs": 1,
+      "force_col_wise": true,
+      "subsample_freq": 1
+    }
+  },
+  "metrics": {
+    "successful_trials": 12,
+    "failed_trials": 0,
+    "seed": 42,
+    "validation_score": 0.1822853001243774
+  },
+  "warnings": []
+}
