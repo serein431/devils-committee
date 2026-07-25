@@ -12,7 +12,88 @@ const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom");
 
 const html = readFileSync(join(__dir, "..", "web", "index.html"), "utf-8");
-const dom = new JSDOM(html, { runScripts: "dangerously", pretendToBeVisual: true });
+const recognitions = [];
+const spoken = [];
+const fetchCalls = [];
+let speechCancelCount = 0;
+
+class MockSpeechRecognition {
+  constructor() {
+    this.started = false;
+    recognitions.push(this);
+  }
+  start() {
+    this.started = true;
+    this.onstart?.();
+  }
+  stop() {
+    this.started = false;
+    this.onend?.();
+  }
+  abort() {
+    this.started = false;
+    this.onend?.();
+  }
+  emitFinal(transcript) {
+    const result = { 0: { transcript }, length: 1, isFinal: true };
+    this.onresult?.({ resultIndex: 0, results: [result] });
+  }
+  end() {
+    this.started = false;
+    this.onend?.();
+  }
+}
+
+class MockSpeechSynthesisUtterance {
+  constructor(text = "") {
+    this.text = text;
+  }
+}
+
+const dom = new JSDOM(html, {
+  runScripts: "dangerously",
+  pretendToBeVisual: true,
+  url: "http://localhost:8080/",
+  beforeParse(win) {
+    win.SpeechRecognition = MockSpeechRecognition;
+    win.webkitSpeechRecognition = MockSpeechRecognition;
+    win.SpeechSynthesisUtterance = MockSpeechSynthesisUtterance;
+    win.speechSynthesis = {
+      speaking: false,
+      paused: false,
+      getVoices: () => [
+        { name: "Mock English", lang: "en-US", default: true },
+        { name: "Mock Cantonese", lang: "zh-HK", default: false },
+        { name: "Mock Mandarin", lang: "zh-CN", default: false },
+      ],
+      speak(utterance) {
+        spoken.push(utterance);
+        this.speaking = true;
+        win.setTimeout(() => {
+          this.speaking = false;
+          utterance.onend?.();
+        }, 200);
+      },
+      cancel() {
+        speechCancelCount++;
+        this.speaking = false;
+        this.paused = false;
+      },
+      pause() { this.paused = true; },
+      resume() { this.paused = false; },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    win.fetch = async (url, options = {}) => {
+      fetchCalls.push({ url: String(url), options });
+      return {
+        ok: true,
+        body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }) }) },
+        json: async () => ({ result: {} }),
+      };
+    };
+  },
+});
 const { window } = dom;
 const { document } = window;
 window.requestAnimationFrame = window.requestAnimationFrame || ((cb) => cb());
@@ -31,6 +112,14 @@ for (const removed of ["AA" + "PL", "NV" + "DA", "TS" + "LA"]) {
 
 let passed = 0;
 const ok = (name, cond) => { assert.ok(cond, name); console.log("  [PASS]", name); passed++; };
+const waitFor = async (predicate, timeoutMs = 500) => {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started >= timeoutMs) return false;
+    await new Promise(resolve => window.setTimeout(resolve, 5));
+  }
+  return true;
+};
 
 ok("four large heads form the first-screen debate stage",
    document.querySelectorAll("#faceStage .face-player").length === 4);
@@ -38,6 +127,39 @@ ok("research details begin after the face stage",
    document.getElementById("faceStage").compareDocumentPosition(document.getElementById("detailsStart")) & window.Node.DOCUMENT_POSITION_FOLLOWING);
 ok("stream controls include pause and show-all",
    document.getElementById("stagePause") && document.getElementById("stageRevealAll"));
+
+// --- browser-native voice input/output -------------------------------------
+for (const id of ["voiceInput", "voiceOutput", "voicePause", "voiceStop", "voiceStatus"]) {
+  ok(`voice control #${id} exists`, !!document.getElementById(id));
+}
+ok("voice status is announced accessibly",
+   document.getElementById("voiceStatus").getAttribute("aria-live") === "polite");
+for (const id of ["voiceInput", "voiceOutput", "voicePause", "voiceStop"]) {
+  const control = document.getElementById(id);
+  ok(`#${id} has an accessible name`, !!(control.getAttribute("aria-label") || control.textContent.trim()));
+}
+ok("voice output is enabled by default",
+   document.getElementById("voiceOutput").getAttribute("aria-pressed") === "true");
+
+document.getElementById("voiceInput").click();
+const recognition = recognitions.at(-1);
+ok("microphone click starts recognition", !!recognition?.started);
+ok("microphone exposes listening state",
+   document.getElementById("voiceInput").classList.contains("listening") &&
+   document.getElementById("voiceInput").getAttribute("aria-label").includes("停止") &&
+   document.getElementById("voiceStatus").textContent.trim().length > 0);
+ok("microphone permission errors tell the user how to recover",
+   window.recognitionErrorMessage("not-allowed").includes("地址栏允许麦克风"));
+
+recognition.emitFinal("研究六零零五一九");
+recognition.end();
+await new Promise(resolve => window.setTimeout(resolve, 5));
+ok("final voice transcript normalizes continuous Chinese digits",
+   document.getElementById("q").value === "研究600519");
+ok("recognition end submits exactly once",
+   fetchCalls.length === 1 &&
+   JSON.parse(fetchCalls[0].options.body).topic === "研究600519");
+document.getElementById("voiceStop").click();
 
 // --- drive the streaming renderer directly (no network) --------------------
 window.handleEvent({ stage: "argue", symbol: "600519.SH" });
@@ -199,13 +321,68 @@ ok("data and skill statuses shown", document.getElementById("trace").textContent
    document.getElementById("trace").textContent.includes("skill-x[success/live]"));
 ok("map + summary sections visible", !document.getElementById("mapSec").className.includes("hidden") &&
    !document.getElementById("sumSec").className.includes("hidden"));
-await new Promise(resolve => window.setTimeout(resolve, 40));
+await new Promise(resolve => window.setTimeout(resolve, 80));
 ok("first screen keeps the last detailed statement after completion",
    document.getElementById("stageQuote").textContent.includes("关键状态数据缺失") &&
    !document.getElementById("stageQuote").textContent.includes("向下滑动"));
 ok("completion does not freeze the last speaker in front",
    document.querySelectorAll("#faceStage .face-player.is-active").length === 0 &&
    !document.getElementById("faceStage").classList.contains("is-debating"));
+
+await waitFor(() => {
+  const text = spoken.map(utterance => utterance.text).join("\n");
+  return text.includes("bull 人话") && text.includes("只挑高分同学") &&
+    (text.includes("都不荐股") || text.includes("仅供学习"));
+}, 2000);
+const spokenText = spoken.map(utterance => utterance.text).join("\n");
+ok("claims enter the speech queue", spoken.length > 0 && spokenText.includes("bull 人话"));
+ok("audit flags enter the speech queue", spokenText.includes("只挑高分同学"));
+ok("result summary enters the speech queue",
+   spokenText.includes("都不荐股") || spokenText.includes("仅供学习"));
+ok("narration explicitly uses Mainland Mandarin",
+   spoken.every(utterance => utterance.lang === "zh-CN" && utterance.voice?.lang === "zh-CN"));
+
+window.handleEvent({
+  stage: "claim", id: "bull-mute", agent: "bull", side: "bull", confidence: 0.5,
+  text: "正在播报时静音", plain: "静音测试", skills_used: [], evidence: [],
+});
+window.handleEvent({
+  stage: "claim", id: "bear-after-mute", agent: "bear", side: "bear", confidence: 0.5,
+  text: "静音后开庭仍继续", plain: "静音不影响开庭", skills_used: [], evidence: [],
+});
+const cancelsBeforeMute = speechCancelCount;
+document.getElementById("voiceOutput").click();
+ok("turning voice output off cancels current speech", speechCancelCount > cancelsBeforeMute);
+await new Promise(resolve => window.setTimeout(resolve, 40));
+ok("turning voice output off does not block the court",
+   document.getElementById("stageQuote").textContent.includes("静音后开庭仍继续"));
+document.getElementById("voiceOutput").click();
+window.handleEvent({
+  stage: "claim", id: "risk-stop", agent: "risk", side: "risk", confidence: 0.5,
+  text: "正在播报时停止", plain: "停止测试", skills_used: [], evidence: [],
+});
+window.handleEvent({
+  stage: "claim", id: "bull-after-stop", agent: "bull", side: "bull", confidence: 0.5,
+  text: "停止播报后开庭仍继续", plain: "停止不影响开庭", skills_used: [], evidence: [],
+});
+await new Promise(resolve => window.setTimeout(resolve, 0));
+const cancelsBeforeStop = speechCancelCount;
+document.getElementById("voiceStop").click();
+ok("voice stop cancels current speech", speechCancelCount > cancelsBeforeStop);
+await new Promise(resolve => window.setTimeout(resolve, 70));
+ok("voice stop does not clear pending court turns",
+   document.getElementById("stageQuote").textContent.includes("停止播报后开庭仍继续"));
+
+window.handleEvent({
+  stage: "claim", id: "macro-pause", agent: "macro", side: "macro", confidence: 0.5,
+  text: "暂停与继续", plain: "暂停测试", skills_used: [], evidence: [],
+});
+document.getElementById("voicePause").click();
+ok("voice pause suspends active narration",
+   window.speechSynthesis.paused && document.getElementById("voicePause").getAttribute("aria-label").includes("继续"));
+document.getElementById("voicePause").click();
+ok("voice resume continues active narration", !window.speechSynthesis.paused);
+document.getElementById("voiceStop").click();
 
 // view toggle: expert is default, beginner toggles
 ok("expert mode is default (not beginner)", !document.body.classList.contains("beginner"));
