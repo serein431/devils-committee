@@ -71,21 +71,31 @@ class _Base:
             item.outcome in {"fail", "warning"} for item in selected
         )
         public_evidence = [item.to_dict() for item in items]
-        if on_delta is None:
+        if insufficient:
+            warnings = list(dict.fromkeys(
+                warning
+                for item in selected
+                for warning in item.warnings
+                if warning
+            ))
+            unavailable = "、".join(item.skill_id for item in selected)
+            detail = f"（{'；'.join(warnings[:2])}）" if warnings else ""
+            text = (
+                f"证据不足：{unavailable} 当前没有可发布结果{detail}，"
+                "因此无法对该维度形成方向性判断；这不代表风险或机会不存在，"
+                "也不能据此推断市场处于某种状态。"
+            )
+            if on_delta is not None:
+                await _call_delta(on_delta, text)
+        elif on_delta is None:
             text = await asyncio.to_thread(
                 self.llm.argue,
                 side=self.side,
                 symbol=evidence.request.symbol,
                 evidence=public_evidence,
             )
-            if insufficient:
-                text = f"证据不足：{text}"
         else:
             parts = []
-            if insufficient:
-                prefix = "证据不足："
-                parts.append(prefix)
-                await _call_delta(on_delta, prefix)
             iterator = iter(
                 self.llm.argue_stream(
                     side=self.side,
@@ -160,6 +170,19 @@ class AuditAgent(_Base):
     ) -> list[AuditVerdict]:
         verdicts = []
         for claim in claims:
+            unavailable_items = [
+                item
+                for item in claim.evidence
+                if item.status in {"insufficient-evidence", "error"}
+            ]
+            unavailable_claim = min(
+                unavailable_items,
+                key=lambda item: (
+                    item.status != "error",
+                    item.skill_id not in AUDIT_STATUS,
+                ),
+                default=None,
+            )
             relevant = [
                 evidence.results[skill_id]
                 for skill_id in AUDIT_STATUS
@@ -186,7 +209,13 @@ class AuditAgent(_Base):
                 ),
                 None,
             )
-            if unavailable is not None:
+            if unavailable_claim is not None:
+                status, source, severity = (
+                    "missing_evidence",
+                    evidence.results.get(unavailable_claim.skill_id),
+                    "medium",
+                )
+            elif unavailable is not None:
                 status, source, severity = (
                     "missing_evidence",
                     unavailable,
@@ -195,16 +224,26 @@ class AuditAgent(_Base):
             elif flagged is not None:
                 status = AUDIT_STATUS[flagged.skill_id]
                 source, severity = flagged, "medium"
-            else:
+            elif relevant:
                 status, source, severity = "pass", None, "none"
+            else:
+                status, source, severity = "missing_evidence", None, "medium"
 
             detail = source.to_dict() if source else {}
-            reason = await asyncio.to_thread(
-                self.llm.audit_reason,
-                status=status,
-                symbol=evidence.request.symbol,
-                detail=detail,
-            )
+            if status == "pass":
+                reason = "现有独立审计结果没有指出可发布的问题。"
+            elif source is None:
+                reason = (
+                    "该论据引用的 Skill 当前没有映射到独立审计器，"
+                    "因此不能标记为通过。"
+                )
+            else:
+                reason = await asyncio.to_thread(
+                    self.llm.audit_reason,
+                    status=status,
+                    symbol=evidence.request.symbol,
+                    detail=detail,
+                )
             verdicts.append(
                 AuditVerdict(
                     claim_id=claim.id,
@@ -213,7 +252,9 @@ class AuditAgent(_Base):
                     audit_skill=source.skill_id if source else "",
                     severity=severity,
                     remediation=(
-                        "补齐缺失字段并重新运行对应 QuantSkill。"
+                        "接入与该论据对应的独立审计器后重新运行。"
+                        if status == "missing_evidence" and source is None
+                        else "补齐缺失字段并重新运行对应 QuantSkill。"
                         if status == "missing_evidence"
                         else "核对引用的异常记录、输入口径与调整因子后重新运行。"
                         if status != "pass"
