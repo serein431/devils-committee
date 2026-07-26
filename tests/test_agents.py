@@ -85,9 +85,63 @@ def test_runtime_profiles_make_agents_discuss_the_stock_not_only_audits(
     assert VALUATION_PROFILE_ID in claims["bear"].skills_used
     assert MARKET_PROFILE_ID in claims["macro"].skills_used
     assert MARKET_PROFILE_ID in claims["risk"].skills_used
+    assert "skill-factor-ranking-sage" not in claims["bull"].skills_used
+    assert "project-index-weight-change-study" not in claims["macro"].skills_used
     assert "skill-model-hpo-evidence-driven" not in claims["risk"].skills_used
+    assert "skill-survivorship-universe-auditor" not in claims["risk"].skills_used
+    assert "skill-corporate-action-adjustment-auditor" not in claims["risk"].skills_used
     assert "skill-portfolio-liquidity-stress-test" not in claims["bull"].skills_used
+    assert "skill-portfolio-liquidity-stress-test" not in claims["bear"].skills_used
     assert "skill-portfolio-liquidity-stress-test" not in claims["macro"].skills_used
+
+
+def test_runtime_profile_prompt_does_not_prime_agents_with_internal_skill_status():
+    system, user = OpenAICompatLLM._argue_prompt(
+        side="bull",
+        symbol="300750.SZ",
+        evidence=[{"dimension": "财务与盈利", "summary": "利润增长"}],
+    )
+
+    assert "outcome=null" not in system
+    assert "mRMR" not in system
+    assert "参数搜索" not in system
+    assert "流动性压力测试" not in system
+    assert "skill_id" not in user
+    assert "project-" not in user
+    assert "股票研究画像" in user
+
+
+def test_runtime_agent_does_not_send_internal_telemetry_to_debate_model(
+    evidence_fixture,
+):
+    class CaptureLLM(MockLLM):
+        def __init__(self):
+            self.seen = []
+
+        def argue(self, *, side, symbol, evidence):
+            self.seen.extend(evidence)
+            return "该股票的财务与市场表现存在可核验分歧。"
+
+    evidence = copy.deepcopy(evidence_fixture)
+    evidence.analysis = {
+        FUNDAMENTAL_PROFILE_ID: SkillResult(
+            skill_id=FUNDAMENTAL_PROFILE_ID,
+            mode="live",
+            status="success",
+            duration_ms=1,
+            dataset_hashes=["private-hash"],
+            metrics={"net_profit_yoy_pct": 12.3},
+            findings=[SkillFinding("归母净利润同比增长", ["fina"], 0.9)],
+        )
+    }
+    llm = CaptureLLM()
+
+    asyncio.run(BullAgent(llm).argue(evidence))
+
+    assert llm.seen
+    assert set(llm.seen[0]) == {"dimension", "summary", "metrics", "assumptions"}
+    assert "skill_id" not in repr(llm.seen)
+    assert "private-hash" not in repr(llm.seen)
 
 
 def test_grounding_guard_rejects_invented_profit_cause():
@@ -118,6 +172,76 @@ def test_grounding_guard_rejects_holder_identity_and_sell_pressure():
 
     assert issue is not None
     assert "不能识别筹码" in issue[0]
+
+
+def test_grounding_guard_rejects_holder_psychology_and_order_flow_story():
+    claim = Claim(
+        id="bear-1",
+        agent="Bear",
+        side="bear",
+        text="股东户数增加说明耐心不足的资金在离场，承接盘零散，上方抛压复杂。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "不能识别筹码" in issue[0]
+
+
+def test_grounding_guard_rejects_mixed_period_demand_story():
+    claim = Claim(
+        id="macro-1",
+        agent="Macro",
+        side="macro",
+        text="产量同比较高说明需求或备货预期旺盛，电池可能流向了库存或储能。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "并非同一时间口径" in issue[0]
+
+
+def test_grounding_guard_rejects_combined_capital_motive_story():
+    claim = Claim(
+        id="bear-1",
+        agent="Bear",
+        side="bear",
+        text="融资、北向与大宗交易的组合说明大资金之间的换手频繁，属于存量博弈。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "不能合并推断" in issue[0]
+
+
+def test_grounding_guard_rejects_unproven_valuation_reasonableness():
+    claim = Claim(
+        id="bull-1",
+        agent="Bull",
+        side="bull",
+        text="PE约21倍，考虑成长速度，这个溢价有它的合理性，并非脱离基本面的炒作。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "缺少同行估值和历史分位" in issue[0]
+
+
+def test_grounding_guard_rejects_unproven_base_effect():
+    claim = Claim(
+        id="bull-1",
+        agent="Bull",
+        side="bull",
+        text="这不是小基数上的反弹。",
+    )
+
+    issue = _claim_grounding_issue(claim)
+
+    assert issue is not None
+    assert "基数效应" in issue[0]
 
 
 def test_grounding_guard_allows_explicit_caveat():
@@ -402,6 +526,7 @@ def test_claim_rebuttal_fields_are_backward_compatible():
     assert claim.kind == "position"
     assert claim.round == 1
     assert claim.responds_to == []
+    assert claim.to_dict()["skills_used"] == []
 
 
 def test_agent_rebuttal_targets_claim_and_uses_integrated_evidence(
@@ -455,7 +580,7 @@ def test_rebut_prompt_contains_claims_audit_and_no_invention_rules():
     system, user = OpenAICompatLLM._rebut_prompt(
         side="bull",
         symbol="601628.SH",
-        evidence=[{"skill_id": "skill-factor-ranking-sage"}],
+        evidence=[{"dimension": "财务与盈利", "summary": "利润下降"}],
         own_claim={"id": "bull-1", "text": "首轮原文"},
         targets=[{"id": "bear-1", "text": "对手原文"}],
         target_verdicts=[{"claim_id": "bear-1", "status": "pass"}],
@@ -466,9 +591,13 @@ def test_rebut_prompt_contains_claims_audit_and_no_invention_rules():
     assert "不得补写" in system
     assert "可以明确承认" in system
     assert "必须忠实引用" in system
-    assert "outcome=null 是正常值" in system
-    assert "不得扩展为方向信号" in system
-    assert "findings 本身不等于异常" in system
+    assert "outcome=null" not in system
+    assert "mRMR" not in system
+    assert "流动性压力测试" not in system
+    assert "skill_id" not in user
+    assert "audit_skill" not in user
+    assert "dataset_hashes" not in user
+    assert "股票研究画像" in user
     assert "bull-1" in user
     assert "bear-1" in user
     assert "对手原文" in user

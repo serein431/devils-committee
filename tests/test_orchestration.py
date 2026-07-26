@@ -189,6 +189,25 @@ def test_all_unavailable_skills_return_empty_insufficient_evidence(
     }
 
 
+def test_live_technical_skills_cannot_replace_missing_stock_profiles(
+    monkeypatch,
+    evidence_fixture,
+):
+    evidence = copy.deepcopy(evidence_fixture)
+    evidence.bundle.mode = "live"
+    evidence.analysis = {}
+
+    async def prepare(self, request):
+        return evidence
+
+    monkeypatch.setattr(SkillRunner, "prepare", prepare)
+    result = asyncio.run(DebateOrchestrator().run("300750.SZ 这只股票怎么样"))
+
+    assert result.meta["data_status"] == "insufficient-evidence"
+    assert result.claims == []
+    assert result.verdicts == []
+
+
 def test_audit_claims_stops_when_all_skills_are_unavailable(
     monkeypatch,
     evidence_fixture,
@@ -490,6 +509,7 @@ def test_stream_emits_detailed_claim_text_as_ordered_deltas(
     assert starts == set(claims)
     assert set(streamed) == set(claims)
     for claim_id, claim in claims.items():
+        assert claim["skills_used"] == []
         assert "".join(streamed[claim_id]) == claim["text"]
         assert claim["plain"] not in "".join(streamed[claim_id])
         matching = [

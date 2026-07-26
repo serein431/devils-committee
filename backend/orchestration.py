@@ -274,7 +274,9 @@ class DebateOrchestrator:
                             "text": claim.text,
                             "plain": claim.plain,
                             "confidence": claim.confidence,
-                            "skills_used": claim.skills_used,
+                            # Main debate cards show conclusions and metrics. Internal
+                            # source identifiers remain available in the trace manifest.
+                            "skills_used": [],
                             "evidence": [item.to_dict() for item in claim.evidence],
                         }
                     await _pace_within_budget(pace, deadline)
@@ -394,7 +396,7 @@ class DebateOrchestrator:
                             "text": claim.text,
                             "plain": claim.plain,
                             "confidence": claim.confidence,
-                            "skills_used": claim.skills_used,
+                            "skills_used": [],
                             "evidence": [item.to_dict() for item in claim.evidence],
                         }
                     await _pace_within_budget(pace, deadline)
@@ -881,8 +883,13 @@ def _evidence_modes(evidence: ResearchEvidence) -> list[str]:
 
 
 def _has_publishable_evidence(evidence: ResearchEvidence) -> bool:
-    """Return whether any Skill or company research profile is publishable."""
+    """Require stock profiles for live debate; technical Skills are audit-only."""
 
+    if evidence.bundle.mode != "mock":
+        return any(
+            result.status == "success"
+            for result in evidence.analysis.values()
+        )
     return any(result.status == "success" for result in evidence.all_results.values())
 
 

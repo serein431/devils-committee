@@ -66,8 +66,8 @@ def test_argue_builds_persona_system_and_evidence_user(monkeypatch):
         dataclasses.replace(llm.CONFIG, llm_model="test-model"),
     )
     o = _openai_without_network()
-    evidence = [{"skill": "skill-factor-ranking-sage", "summary": "正向排序",
-                 "metrics": {"ic": 0.04}}]
+    evidence = [{"dimension": "财务与盈利", "summary": "利润同比改善",
+                 "metrics": {"net_profit_yoy_pct": 4.0}}]
     out = o.argue(side="bull", symbol="600519.SH", evidence=evidence)
     assert out == "MOCKED_REPLY"
     url, body = o._client.calls[0]
@@ -77,14 +77,15 @@ def test_argue_builds_persona_system_and_evidence_user(monkeypatch):
     system, user = body["messages"][0]["content"], body["messages"][1]["content"]
     assert llm.PERSONAS["bull"]["name"] in system
     assert "买入" in system or "荐股" in system    # persona forbids buy/sell advice
-    assert "outcome=null 是正常值" in system
-    assert "不得扩展为方向信号" in system
-    assert "findings 本身不等于异常" in system
+    assert "outcome=null" not in system
+    assert "mRMR" not in system
+    assert "流动性压力测试" not in system
     assert "盈利成长" in system
     assert "第一句必须直接判断" in system
-    assert "project-company-fundamentals" in system
+    assert "财务与盈利画像" in system
     assert "600519.SH" in user
-    assert "skill-factor-ranking-sage" in user     # evidence JSON is passed through
+    assert "skill-" not in user
+    assert "财务与盈利" in user
 
 
 def test_argue_stream_forwards_real_sse_deltas(monkeypatch):
@@ -101,7 +102,7 @@ def test_argue_stream_forwards_real_sse_deltas(monkeypatch):
         o.argue_stream(
             side="bull",
             symbol="600519.SH",
-            evidence=[{"skill": "skill-factor-ranking-sage"}],
+            evidence=[{"dimension": "财务与盈利"}],
         )
     )
 

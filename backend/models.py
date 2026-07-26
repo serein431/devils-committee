@@ -127,6 +127,10 @@ class Claim:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["evidence"] = [e.to_dict() for e in self.evidence]
+        # Internal source routing belongs to meta.skills_manifest. Keeping it
+        # out of the user-facing claim prevents the UI from turning a stock
+        # discussion back into a list of tool names.
+        d["skills_used"] = []
         return d
 
 

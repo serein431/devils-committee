@@ -1,4 +1,4 @@
-"""Debate agents that only explain existing QuantSkill results."""
+"""Debate agents that explain stock research profiles and challenge each other."""
 
 from __future__ import annotations
 
@@ -38,7 +38,6 @@ ROLE_SKILLS = {
         FLOW_PROFILE_ID,
         OWNERSHIP_PROFILE_ID,
         EVENT_PROFILE_ID,
-        "skill-factor-ranking-sage",
     ],
     "bear": [
         VALUATION_PROFILE_ID,
@@ -48,14 +47,12 @@ ROLE_SKILLS = {
         FLOW_PROFILE_ID,
         OWNERSHIP_PROFILE_ID,
         EVENT_PROFILE_ID,
-        "skill-portfolio-liquidity-stress-test",
     ],
     "macro": [
         COMPANY_PROFILE_ID,
         INDUSTRY_PROFILE_ID,
         MACRO_PROFILE_ID,
         MARKET_PROFILE_ID,
-        "project-index-weight-change-study",
     ],
     "risk": [
         MARKET_PROFILE_ID,
@@ -63,9 +60,6 @@ ROLE_SKILLS = {
         FLOW_PROFILE_ID,
         OWNERSHIP_PROFILE_ID,
         EVENT_PROFILE_ID,
-        "skill-portfolio-liquidity-stress-test",
-        "skill-survivorship-universe-auditor",
-        "skill-corporate-action-adjustment-auditor",
     ],
 }
 
@@ -97,6 +91,29 @@ AUDIT_STATUS = {
     "skill-model-hpo-evidence-driven": "suspected_overfit",
     "skill-corporate-action-adjustment-auditor": "bad_data",
 }
+
+PROFILE_LABELS = {
+    COMPANY_PROFILE_ID: "公司与行业背景",
+    FUNDAMENTAL_PROFILE_ID: "财务与盈利",
+    VALUATION_PROFILE_ID: "估值快照",
+    MARKET_PROFILE_ID: "市场表现与风险",
+    INDUSTRY_PROFILE_ID: "行业横向比较",
+    FLOW_PROFILE_ID: "资金与交易情绪",
+    OWNERSHIP_PROFILE_ID: "股东与资本行为",
+    EVENT_PROFILE_ID: "公司事件",
+    MACRO_PROFILE_ID: "宏观与行业环境",
+}
+
+
+def _public_research_evidence(item: Evidence) -> dict:
+    """Give the debate model conclusions, never internal Skill telemetry."""
+
+    return {
+        "dimension": PROFILE_LABELS.get(item.skill_id, "补充研究资料"),
+        "summary": item.summary,
+        "metrics": dict(item.metrics),
+        "assumptions": list(item.assumptions),
+    }
 
 
 def _claim_grounding_issue(claim: Claim) -> tuple[str, str] | None:
@@ -141,12 +158,59 @@ def _claim_grounding_issue(claim: Claim) -> tuple[str, str] | None:
             "股东户数" in sentence
             and any(
                 token in sentence
-                for token in ("筹码从", "向散户", "机构或大户", "长线资金", "抛售压力")
+                for token in (
+                    "筹码从",
+                    "向散户",
+                    "机构或大户",
+                    "长线资金",
+                    "耐心不足",
+                    "资金在离场",
+                    "承接盘",
+                    "锁定性",
+                    "抛售压力",
+                    "卖压",
+                    "抛压",
+                )
             )
         ):
             return (
                 "股东户数变化只能说明持股集中度变化，不能识别筹码由哪类投资者转移，也不能直接推出未来抛售压力。",
                 "将结论收窄为持股趋于集中或分散；若要判断投资者类型和卖压，需要独立持仓与交易数据。",
+            )
+        if any(token in sentence for token in ("小基数", "低基数")):
+            return (
+                "现有财务画像没有提供可验证的基数效应分析，不能把增长直接解释为或排除为小基数反弹。",
+                "只报告营收和利润同比变化；补充上年同期绝对值、历史序列与业务拆分后再判断基数效应。",
+            )
+        if any(
+            token in sentence
+            for token in (
+                "需求或备货预期",
+                "需求很旺盛",
+                "流向了库存",
+                "流向库存",
+                "流向了储能",
+                "非车端领域",
+            )
+        ):
+            return (
+                "产量与装车量指标不能识别需求、备货、库存或储能去向，而且当月同比与累计同比并非同一时间口径。",
+                "只陈述两个指标及口径差异，把需求消化和产品去向列为待验证问题。",
+            )
+        if any(
+            token in sentence
+            for token in (
+                "大资金之间的换手",
+                "大资金换手",
+                "存量博弈",
+                "资金面的合力",
+                "资金合力",
+                "恐慌出逃",
+            )
+        ):
+            return (
+                "融资、北向和大宗交易记录属于不同参与者与统计口径，不能合并推断大资金动机、换手性质或资金合力。",
+                "分别报告各类资金指标，不推断参与者身份、情绪或交易目的。",
             )
         if any(token in sentence for token in ("市场风格确实", "市场风格在", "风格确实在往")):
             return (
@@ -155,11 +219,19 @@ def _claim_grounding_issue(claim: Claim) -> tuple[str, str] | None:
             )
         if (
             "分红" in sentence
-            and any(token in sentence for token in ("安全垫", "长期持有", "持有提供"))
+            and any(token in sentence for token in ("安全垫", "长期持有", "持有提供", "内部信心"))
         ):
             return (
                 "分红记录与审计意见属于公司治理和历史分配事实，不能单独构成长线持有的安全垫。",
                 "只陈述分红计划和审计意见，不外推为持有价值或下行保护。",
+            )
+        if (
+            "回购" in sentence
+            and any(token in sentence for token in ("内部信心", "承接意愿", "对冲", "支撑股价"))
+        ):
+            return (
+                "回购记录只能说明已披露的公司行为，不能直接证明内部信心、承接意愿或对股价的支撑效果。",
+                "只报告回购计划或进度；补充实施规模、成交价格和股本影响后再讨论其经济作用。",
             )
         if (
             any(token in sentence for token in ("估值", "PE", "PB"))
@@ -172,6 +244,11 @@ def _claim_grounding_issue(claim: Claim) -> tuple[str, str] | None:
                     "安全垫",
                     "安全边际",
                     "不构成负面拖累",
+                    "不支持它被高估",
+                    "估值合理",
+                    "溢价有它的合理性",
+                    "溢价合理",
+                    "脱离基本面的炒作",
                 )
             )
             and "是否" not in sentence
@@ -327,11 +404,13 @@ class _Base:
         has_domain_issue = any(
             item.outcome in {"fail", "warning"} for item in selected
         )
-        has_unverified_analysis = any(
-            item.status == "success" and item.outcome is None
+        has_unverified_technical_analysis = any(
+            item.skill_id not in PROFILE_LABELS
+            and item.status == "success"
+            and item.outcome is None
             for item in selected
         )
-        public_evidence = [item.to_dict() for item in items]
+        public_evidence = [_public_research_evidence(item) for item in items]
         if insufficient:
             warnings = list(dict.fromkeys(
                 warning
@@ -386,7 +465,7 @@ class _Base:
                     0.3
                     if insufficient
                     else 0.45
-                    if has_domain_issue or has_unverified_analysis
+                    if has_domain_issue or has_unverified_technical_analysis
                     else 0.65
                 ),
                 evidence=items,
@@ -420,10 +499,29 @@ class _Base:
         llm_args = {
             "side": self.side,
             "symbol": evidence.request.symbol,
-            "evidence": [item.to_dict() for item in items],
-            "own_claim": own_claim.to_dict(),
-            "targets": [target.to_dict() for target in targets],
-            "target_verdicts": [verdict.to_dict() for verdict in target_verdicts],
+            "evidence": [_public_research_evidence(item) for item in items],
+            "own_claim": {
+                "id": own_claim.id,
+                "side": own_claim.side,
+                "text": own_claim.text,
+            },
+            "targets": [
+                {
+                    "id": target.id,
+                    "agent": target.agent,
+                    "side": target.side,
+                    "text": target.text,
+                }
+                for target in targets
+            ],
+            "target_verdicts": [
+                {
+                    "claim_id": verdict.claim_id,
+                    "status": verdict.status,
+                    "plain": verdict.plain,
+                }
+                for verdict in target_verdicts
+            ],
         }
         if on_delta is None:
             text = await asyncio.to_thread(self.llm.rebut, **llm_args)

@@ -129,3 +129,15 @@ def test_live_a2a_research_is_repeatable(symbol):
     assert result.meta["data_status"] == "success"
     assert result.disclaimer
     assert result.elapsed_sec <= 600
+    public = result.to_dict()
+    claim_text = "\n".join(item["text"] for item in public["claims"])
+    for internal_term in (
+        "skill-",
+        "outcome",
+        "mRMR",
+        "HPO",
+        "demo assumption",
+        "10bps",
+    ):
+        assert internal_term.lower() not in claim_text.lower()
+    assert all(item["skills_used"] == [] for item in public["claims"])
