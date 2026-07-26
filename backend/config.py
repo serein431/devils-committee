@@ -23,6 +23,7 @@ def _load_dotenv(path: str = ".env") -> None:
 
 
 _load_dotenv()
+_load_dotenv(".viaim.env")
 
 
 def _env(key: str, default: str = "") -> str:

@@ -6,5 +6,6 @@ duckdb>=1.1,<2
 panda_data==0.0.12
 scikit-learn>=1.5,<2
 lightgbm>=4.5,<5
-torch>=2.3,<3
+faster-whisper==1.2.1
+viaim-ai-open==0.1.1
 PyYAML>=6,<7

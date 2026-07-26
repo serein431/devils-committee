@@ -48,6 +48,23 @@ def test_healthz_always_ok():
     assert r.status_code == 200 and r.json()["ok"] is True
 
 
+def test_transcribe_accepts_raw_browser_audio(monkeypatch):
+    monkeypatch.setattr(
+        a2a_server.transcription,
+        "transcribe_audio",
+        lambda payload: "研究 300750 的波动风险" if len(payload) >= 100 else "",
+    )
+
+    response = client.post(
+        "/api/transcribe",
+        content=b"browser-audio" * 10,
+        headers={"Content-Type": "audio/webm"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "研究 300750 的波动风险"}
+
+
 def test_avatar_assets_are_served_as_webp():
     for side in ("bull", "bear", "macro", "risk"):
         for state in ("idle", "speaking", "emphasis"):

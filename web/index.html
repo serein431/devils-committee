@@ -452,6 +452,7 @@ AVATAR_SIDES.forEach(side=>AVATAR_STATES.forEach(state=>{
 let stageQueue=[],stageBusy=false,stageTimer=0,stageFrameTimer=0,stageFinished=false,stageStreamId="";
 let streamPaused=false,streamRevealAll=false,streamPauseWaiters=[];
 const SpeechRecognitionAPI=window.SpeechRecognition||window.webkitSpeechRecognition;
+const BACKEND_RECORDING_SUPPORTED=!!(navigator.mediaDevices?.getUserMedia&&window.MediaRecorder);
 const speechEngine=window.speechSynthesis;
 const SPEECH_OUTPUT_SUPPORTED=!!(speechEngine&&window.SpeechSynthesisUtterance);
 const VOICE_PREF_KEY="devils-committee-auto-voice";
@@ -463,6 +464,7 @@ const VOICE_PROFILE={
 let recognition=null,recognitionActive=false,recognitionFailed=false,recognitionFinal="",recognitionCandidate="";
 let voiceSubmitQueued=false,researchRunning=false,availableVoices=[];
 let voiceNetworkRetries=0;
+let backendRecorder=null,backendVoiceStream=null,backendVoiceChunks=[],backendVoiceTimer=0;
 let speechVoiceCatalogReady=false,narrationQueue=[],narrationBusy=false;
 let speechToken=0,speechWatchdog=0,speechWatchdogFallback=null,activeUtterance=null,speechPaused=false;
 let conversationRoot="",conversationSymbol="",conversationHistory=[],conversationRound=0,activeQuestion="";
@@ -487,10 +489,10 @@ function updateVoiceOutputButton(){
 }
 function updateRecognitionButton(){
   const button=$("#voiceInput");
-  const insecure=window.isSecureContext===false,unsupported=!SpeechRecognitionAPI||insecure;
+  const insecure=window.isSecureContext===false,unsupported=(!BACKEND_RECORDING_SUPPORTED&&!SpeechRecognitionAPI)||insecure;
   button.disabled=unsupported||researchRunning;
   button.classList.toggle("listening",recognitionActive);
-  const label=insecure?"语音输入需要 HTTPS 或 localhost":!SpeechRecognitionAPI?"当前浏览器不支持语音输入，请使用 Chrome 或 Edge":recognitionActive?"停止语音输入":"开始语音输入";
+  const label=insecure?"语音输入需要 HTTPS 或 localhost":unsupported?"当前浏览器不支持语音输入，请使用 Chrome 或 Edge":recognitionActive?"停止语音输入":"开始语音输入";
   button.setAttribute("aria-label",label);button.title=label;button.textContent=recognitionActive?"■":"🎙";
 }
 function updateSpeechButtons(){
@@ -630,10 +632,54 @@ function recognitionErrorMessage(code){
     "no-speech":"没有识别到语音","audio-capture":"没有找到可用麦克风","network":"浏览器语音服务连接失败，请直接键入或稍后重试",
     "language-not-supported":"当前设备不支持普通话识别"}[code]||"语音识别失败，请改用文字输入";
 }
+function acceptVoiceQuery(value){
+  const query=normalizeVoiceQuery(value);if(!query){setVoiceStatus("没有识别到有效内容",true);return;}
+  $("#q").value=query;setVoiceStatus("识别完成，正在开庭…");
+  if(!voiceSubmitQueued&&!researchRunning){
+    voiceSubmitQueued=true;setTimeout(()=>{voiceSubmitQueued=false;run();},0);
+  }
+}
+function releaseBackendVoiceStream(){
+  clearTimeout(backendVoiceTimer);backendVoiceTimer=0;
+  if(backendVoiceStream)backendVoiceStream.getTracks().forEach(track=>track.stop());
+  backendVoiceStream=null;
+}
+async function startBackendVoiceInput(){
+  stopNarration();backendVoiceChunks=[];
+  try{
+    backendVoiceStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+    const mimeTypes=["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"];
+    const mimeType=mimeTypes.find(type=>MediaRecorder.isTypeSupported?.(type))||"";
+    backendRecorder=mimeType?new MediaRecorder(backendVoiceStream,{mimeType}):new MediaRecorder(backendVoiceStream);
+    backendRecorder.ondataavailable=event=>{if(event.data?.size)backendVoiceChunks.push(event.data);};
+    backendRecorder.onerror=()=>{recognitionActive=false;releaseBackendVoiceStream();updateRecognitionButton();setVoiceStatus("录音失败，请重试",true);};
+    backendRecorder.onstop=async()=>{
+      const recorder=backendRecorder;backendRecorder=null;recognitionActive=false;releaseBackendVoiceStream();updateRecognitionButton();
+      if(!backendVoiceChunks.length){setVoiceStatus("没有录到声音",true);return;}
+      setVoiceStatus("正在转写普通话…");
+      const audio=new Blob(backendVoiceChunks,{type:recorder.mimeType||"audio/webm"});backendVoiceChunks=[];
+      try{
+        const response=await fetch("/api/transcribe",{method:"POST",headers:{"Content-Type":audio.type||"application/octet-stream"},body:audio});
+        const payload=await response.json();
+        if(!response.ok||!payload.text)throw new Error("transcription failed");
+        acceptVoiceQuery(payload.text);
+      }catch(_){setVoiceStatus("语音转写失败，请重试",true);}
+    };
+    backendRecorder.start(250);recognitionActive=true;updateRecognitionButton();setVoiceStatus("正在录音…");
+    backendVoiceTimer=setTimeout(()=>{if(backendRecorder?.state==="recording")backendRecorder.stop();},18000);
+  }catch(error){
+    recognitionActive=false;releaseBackendVoiceStream();updateRecognitionButton();
+    const denied=error?.name==="NotAllowedError"||error?.name==="SecurityError";
+    setVoiceStatus(denied?"麦克风权限未开启，请在地址栏允许麦克风后重试":"无法启动麦克风",true);
+  }
+}
 function startVoiceInput(retrying=false){
+  if(backendRecorder?.state==="recording"){backendRecorder.stop();return;}
   if(recognitionActive){recognition.stop();return;}
   if(window.isSecureContext===false){setVoiceStatus("语音输入需要 HTTPS 或 localhost",true);return;}
-  if(!SpeechRecognitionAPI||researchRunning)return;
+  if(researchRunning)return;
+  if(BACKEND_RECORDING_SUPPORTED){startBackendVoiceInput();return;}
+  if(!SpeechRecognitionAPI)return;
   if(!retrying){stopNarration();recognitionFinal="";recognitionCandidate="";voiceNetworkRetries=0;}
   recognitionFailed=false;
   recognition=new SpeechRecognitionAPI();recognition.lang="zh-CN";recognition.continuous=false;
@@ -660,10 +706,7 @@ function startVoiceInput(retrying=false){
     recognitionActive=false;recognition=null;updateRecognitionButton();
     if(retryOnEnd){setTimeout(()=>startVoiceInput(true),350);return;}
     if(recognitionFailed||!query)return;
-    $("#q").value=query;setVoiceStatus("识别完成，正在开庭…");
-    if(!voiceSubmitQueued&&!researchRunning){
-      voiceSubmitQueued=true;setTimeout(()=>{voiceSubmitQueued=false;run();},0);
-    }
+    acceptVoiceQuery(query);
   };
   recognitionActive=true;updateRecognitionButton();setVoiceStatus("正在启动麦克风…");
   try{recognition.start();}catch(_){recognitionActive=false;recognitionFailed=true;updateRecognitionButton();setVoiceStatus("麦克风启动失败",true);}
@@ -1243,6 +1286,7 @@ if(SPEECH_OUTPUT_SUPPORTED){
 }
 window.addEventListener("beforeunload",()=>{
   cancelActiveSpeech();
+  if(backendRecorder?.state==="recording")backendRecorder.stop();releaseBackendVoiceStream();
   if(recognitionActive&&recognition){recognitionFailed=true;try{recognition.abort();}catch(_){}}
 });
 // flag-slam animation hook

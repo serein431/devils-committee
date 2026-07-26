@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import CONFIG
 from .orchestration import DebateOrchestrator, _extract_symbol
 from .research_request import ResearchRequest
+from . import transcription
 
 log = logging.getLogger("devils-committee")
 
@@ -100,6 +101,31 @@ async def agent_card() -> JSONResponse:
 @app.get("/healthz")
 async def healthz() -> dict:
     return {"ok": True, "service": "devils-committee", "modes": CONFIG.summary()}
+
+
+@app.post("/api/transcribe")
+async def transcribe(request: Request) -> JSONResponse:
+    content_type = (request.headers.get("content-type") or "").lower()
+    if not (content_type.startswith("audio/") or content_type.startswith("application/octet-stream")):
+        raise HTTPException(status_code=415, detail="unsupported audio type")
+    payload = await request.body()
+    if len(payload) > transcription.MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="audio is too large")
+    try:
+        text = await asyncio.wait_for(
+            asyncio.to_thread(transcription.transcribe_audio, payload),
+            timeout=120,
+        )
+    except transcription.InvalidAudio:
+        raise HTTPException(status_code=422, detail="no speech recognized") from None
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="transcription timed out") from None
+    except Exception:
+        log.exception("speech transcription failed")
+        raise HTTPException(status_code=503, detail="transcription unavailable") from None
+    if not text:
+        raise HTTPException(status_code=422, detail="no speech recognized")
+    return JSONResponse({"text": text})
 
 
 # --- A2A message endpoint --------------------------------------------------
