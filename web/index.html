@@ -1128,6 +1128,11 @@ function handleEvent(ev){
       setStage("主持收敛共识与分歧",true);return;
     case "result":
       lightPipe("synthesize",true);renderResult(ev.result);
+      const summary=(ev.result.consensus||[])[0];
+      if(summary){
+        returnStagePlayers("CHAIR · 主持总结");
+        const quote=$("#stageQuote");quote.dataset.rawText=summary;quote.innerHTML=inlineMd(summary);quote.scrollTop=0;
+      }
       rememberConversation(ev.result);
       queueNarration(makeStageTurn({side:"chair",text:resultNarration(ev.result),speechText:resultNarration(ev.result)},"speaking","result"));return;
   }

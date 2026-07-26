@@ -414,9 +414,10 @@ ok("data and skill statuses shown", document.getElementById("trace").textContent
 ok("map + summary sections visible", !document.getElementById("mapSec").className.includes("hidden") &&
    !document.getElementById("sumSec").className.includes("hidden"));
 await new Promise(resolve => window.setTimeout(resolve, 80));
-ok("first screen keeps the last detailed statement after completion",
-   document.getElementById("stageQuote").textContent.includes("回应 bear-1 的流动性前提") &&
-   !document.getElementById("stageQuote").textContent.includes("向下滑动"));
+ok("first screen shows the chair summary after completion",
+   document.getElementById("stageSpeaker").textContent.includes("主持总结") &&
+   document.getElementById("stageQuote").textContent.includes("都不荐股") &&
+   !document.getElementById("stageQuote").textContent.includes("回应 bear-1 的流动性前提"));
 ok("completion does not freeze the last speaker in front",
    document.querySelectorAll("#faceStage .face-player.is-active").length === 0 &&
    !document.getElementById("faceStage").classList.contains("is-debating"));
