@@ -87,6 +87,18 @@ const dom = new JSDOM(html, {
     };
     win.fetch = async (url, options = {}) => {
       fetchCalls.push({ url: String(url), options });
+      if (String(url) === "/api/follow-up") {
+        return {
+          ok: true,
+          json: async () => ({
+            answer: "主持人根据上一轮材料单独回答：波动仍是主要风险。",
+            agent: "Chair",
+            mode: "single-agent",
+            symbol: "600519.SH",
+            disclaimer: "本次追问未重新取数或启动多智能体审计。",
+          }),
+        };
+      }
       return {
         ok: true,
         body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }) }) },
@@ -466,16 +478,23 @@ ok("completed research exposes separate follow-up and new-question actions",
    document.getElementById("go").textContent.includes("追问") &&
    !document.getElementById("newQuestion").classList.contains("hidden"));
 
+const agentCardsBeforeFollowUp = document.querySelectorAll("#debate .agent").length;
 document.getElementById("q").value = "那波动风险怎么看？";
 document.getElementById("go").click();
 await new Promise(resolve => window.setTimeout(resolve, 10));
+const followUpCall = fetchCalls.at(-1);
 const followUpPayload = JSON.parse(fetchCalls.at(-1).options.body);
-ok("follow-up includes the prior conversation context",
-   followUpPayload.topic.includes("同一研究会话的历史") && followUpPayload.topic.includes("用户最新追问：那波动风险怎么看？") &&
-   followUpPayload.topic.includes("最新追问是本轮唯一主问题"));
+ok("follow-up uses the dedicated single-agent endpoint",
+   followUpCall.url === "/api/follow-up" && followUpPayload.question === "那波动风险怎么看？" &&
+   followUpPayload.symbol === "600519.SH" && Array.isArray(followUpPayload.history));
+ok("follow-up does not create another multi-agent debate",
+   document.querySelectorAll("#debate .agent").length === agentCardsBeforeFollowUp &&
+   document.querySelectorAll("#debate .follow-up-answer").length === 1 &&
+   document.getElementById("stage").textContent.includes("未启动多 Agent"));
 ok("follow-up appends a second visible conversation round",
    document.querySelectorAll("#debate .round-question").length === 2 &&
-   document.querySelector('#debate .round-question[data-round="2"]').textContent.includes("那波动风险怎么看"));
+   document.querySelector('#debate .round-question[data-round="2"]').textContent.includes("那波动风险怎么看") &&
+   document.querySelector("#debate .follow-up-answer").textContent.includes("波动仍是主要风险"));
 
 document.getElementById("q").value = "300750.SZ 的流动性风险";
 document.getElementById("newQuestion").click();

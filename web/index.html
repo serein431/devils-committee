@@ -210,6 +210,11 @@
   .round-question{grid-column:1/-1;border-left:2px solid var(--accent);background:var(--panel2);
     padding:9px 12px;color:var(--ink);font-family:var(--sans);font-size:12.5px;line-height:1.55}
   .round-question b{color:var(--accent);font-family:var(--mono);font-size:10px;letter-spacing:.8px;margin-right:8px}
+  .follow-up-answer{grid-column:1/-1;border:1px solid var(--line2);border-radius:5px;background:var(--panel);
+    padding:12px 14px;color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.65}
+  .follow-up-answer .follow-up-head{color:var(--accent);font-family:var(--mono);font-size:10px;
+    letter-spacing:.8px;margin-bottom:6px}
+  .follow-up-answer .follow-up-note{color:var(--dim);font-size:10.5px;margin-top:8px}
   .agent{border:1px solid var(--line2);border-radius:5px;background:var(--panel);overflow:hidden;
     opacity:0;transform:translateY(8px);transition:.4s}
   .agent.in{opacity:1;transform:none}
@@ -956,18 +961,24 @@ function resetConversation(){
   $("#newQuestion").classList.add("hidden");
   $("#q").placeholder="输入 A 股研究问题，如：600519.SH 的复权、分红、因子和流动性风险";
 }
-function conversationTopic(question){
-  if(!conversationHistory.length)return question;
-  const history=conversationHistory.map((turn,index)=>{
-    const answers=turn.answers.map(item=>`${item.agent}：${item.text}`).join("\n");
-    return `第 ${index+1} 轮用户：${turn.question}\n${answers}`;
-  }).join("\n\n");
-  return `${conversationRoot}\n\n同一研究会话的历史：\n${history}\n\n用户最新追问：${question}\n最新追问是本轮唯一主问题。请四个研究 Agent 分别直接回答它，历史只用于理解上下文；不要重复首轮总报告，并保持原有证据标准。`;
+function followUpPayload(question){
+  return {
+    symbol:conversationSymbol,
+    question,
+    history:conversationHistory.slice(-6),
+  };
 }
 function appendRoundQuestion(question){
   const row=document.createElement("div");row.className="round-question";row.dataset.round=String(conversationRound);
   const label=document.createElement("b");label.textContent=conversationRound===1?"首轮问题":`第 ${conversationRound} 轮追问`;
   row.append(label,document.createTextNode(question));$("#debate").appendChild(row);
+  return row;
+}
+function appendFollowUpAnswer(answer,disclaimer){
+  const card=document.createElement("div");card.className="follow-up-answer";card.dataset.round=String(conversationRound);
+  card.innerHTML=`<div class="follow-up-head">CHAIR · 单独回答</div><div>${inlineMd(answer)}</div>`+
+    (disclaimer?`<div class="follow-up-note">${esc(disclaimer)}</div>`:"");
+  $("#debate").appendChild(card);return card;
 }
 function rememberConversation(result){
   if(!activeQuestion)return;
@@ -975,9 +986,11 @@ function rememberConversation(result){
     agent:(SIDE[claim.side]||[claim.agent||"Agent"])[0],
     text:String(claim.text||claim.plain||"").slice(0,1200),
   }));
+  (result.consensus||[]).slice(0,2).forEach(text=>answers.push({agent:"主持",text:String(text).slice(0,1200)}));
+  if(!answers.length)(result.risk_boundaries||[]).slice(0,2).forEach(text=>answers.push({agent:"研究结果",text:String(text).slice(0,1200)}));
   conversationHistory.push({question:activeQuestion,answers});activeQuestion="";
   conversationSymbol=(result.meta||{}).symbol||conversationSymbol;
-  $("#q").value="";$("#q").placeholder="继续追问，四个研究 Agent 会结合前文回答";
+  $("#q").value="";$("#q").placeholder="继续追问，主持 Agent 会结合前文直接回答";
   $("#go").textContent="追问 ⏎";
   $("#newQuestion").classList.remove("hidden");
 }
@@ -1201,6 +1214,32 @@ function showCompatibilityProgress(){
   setStage(message,true);
 }
 
+async function runFollowUp(question){
+  conversationRound=conversationHistory.length+1;activeQuestion=question;
+  const questionRow=appendRoundQuestion(question);
+  researchRunning=true;voiceSubmitQueued=false;$("#go").disabled=true;$("#newQuestion").disabled=true;updateRecognitionButton();
+  stopNarration();
+  showStageTurn({side:"chair",state:"speaking",text:"主持 Agent 正在结合上一轮结论回答追问……"});
+  setStage("单独追问：不重新取数，不启动多 Agent 辩论",true);setVoiceStatus("主持 Agent 正在回答追问");
+  try{
+    const response=await fetch("/api/follow-up",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(followUpPayload(question))});
+    const payload=await response.json();
+    if(!response.ok||!payload.answer)throw new Error("follow-up failed");
+    appendFollowUpAnswer(payload.answer,payload.disclaimer);
+    conversationHistory.push({question,answers:[{agent:"主持",text:String(payload.answer).slice(0,2000)}]});
+    activeQuestion="";$("#q").value="";$("#q").placeholder="继续追问，主持 Agent 会结合前文直接回答";
+    showStageTurn({side:"chair",state:"speaking",text:payload.answer});returnStagePlayers("CHAIR · 单独回答");
+    queueNarration(makeStageTurn({side:"chair",text:payload.answer,speechText:payload.answer},"speaking","result"));
+    setStage("追问已回答 · 本轮未启动多 Agent",false);setVoiceStatus("追问回答完成");
+  }catch(_){
+    questionRow.remove();activeQuestion="";
+    returnStagePlayers("追问失败");setStage("追问请求失败，请稍后重试。",false);setVoiceStatus("追问请求失败，请稍后重试",true);
+  }finally{
+    researchRunning=false;$("#go").disabled=false;$("#newQuestion").disabled=false;updateRecognitionButton();
+  }
+}
+
 async function run(){
   const q=$("#q").value.trim();if(!q||researchRunning)return;
   const inputError=researchInputError(q,conversationHistory.length>0);
@@ -1208,9 +1247,10 @@ async function run(){
   const nextSymbol=querySymbol(q),currentDigits=querySymbol(conversationSymbol||conversationRoot);
   if(conversationHistory.length&&nextSymbol&&currentDigits&&nextSymbol!==currentDigits)resetConversation();
   const followUp=conversationHistory.length>0;
+  if(followUp){await runFollowUp(q);return;}
   if(!followUp){conversationRoot=q;conversationSymbol=nextSymbol;conversationHistory=[];}
   conversationRound=conversationHistory.length+1;activeQuestion=q;
-  const requestTopic=conversationTopic(q);
+  const requestTopic=q;
   researchRunning=true;voiceSubmitQueued=false;$("#go").disabled=true;$("#newQuestion").disabled=true;updateRecognitionButton();
   if(recognitionActive&&recognition){recognitionFailed=true;try{recognition.abort();}catch(_){}}
   flags=0;beginStageDebate();

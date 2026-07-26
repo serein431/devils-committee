@@ -65,6 +65,65 @@ def test_transcribe_accepts_raw_browser_audio(monkeypatch):
     assert response.json() == {"text": "研究 300750 的波动风险"}
 
 
+def test_follow_up_uses_one_chair_agent_without_starting_a_debate(monkeypatch):
+    calls = []
+
+    class FakeLLM:
+        def follow_up(self, *, symbol, question, history):
+            calls.append((symbol, question, history))
+            return "结合上一轮波动数据回答，不需要重新辩论。"
+
+    monkeypatch.setattr(a2a_server, "get_llm", lambda: FakeLLM())
+    monkeypatch.setattr(
+        a2a_server.DebateOrchestrator,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("debate must not run")),
+    )
+
+    response = client.post("/api/follow-up", json={
+        "symbol": "300750.SZ",
+        "question": "那波动风险怎么看？",
+        "history": [{
+            "question": "分析 300750.SZ",
+            "answers": [{"agent": "风控", "text": "近 60 日波动较高。"}],
+        }],
+    })
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "single-agent"
+    assert response.json()["answer"] == "结合上一轮波动数据回答，不需要重新辩论。"
+    assert len(calls) == 1
+    assert calls[0][0:2] == ("300750.SZ", "那波动风险怎么看？")
+
+
+def test_follow_up_response_passes_the_compliance_gate(monkeypatch):
+    class FakeLLM:
+        def follow_up(self, **kwargs):
+            return "建议买入，并给出目标价。"
+
+    monkeypatch.setattr(a2a_server, "get_llm", lambda: FakeLLM())
+    response = client.post("/api/follow-up", json={
+        "symbol": "600519.SH",
+        "question": "所以应该怎么操作？",
+        "history": [{"question": "分析 600519.SH", "answers": []}],
+    })
+
+    assert response.status_code == 200
+    assert "建议买入" not in response.json()["answer"]
+    assert "目标价" not in response.json()["answer"]
+    assert "单一主持 Agent" in response.json()["disclaimer"]
+
+
+def test_follow_up_requires_existing_conversation_context():
+    response = client.post("/api/follow-up", json={
+        "symbol": "600519.SH",
+        "question": "继续说说",
+        "history": [],
+    })
+
+    assert response.status_code == 422
+
+
 def test_avatar_assets_are_served_as_webp():
     for side in ("bull", "bear", "macro", "risk"):
         for state in ("idle", "speaking", "emphasis"):

@@ -26,8 +26,10 @@ from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Pla
 from fastapi.staticfiles import StaticFiles
 
 from .config import CONFIG
+from .compliance import enforce_dict
+from .llm import get_llm
 from .orchestration import DebateOrchestrator, _extract_symbol
-from .research_request import ResearchRequest
+from .research_request import ResearchRequest, normalize_symbol
 from . import transcription
 
 log = logging.getLogger("devils-committee")
@@ -126,6 +128,73 @@ async def transcribe(request: Request) -> JSONResponse:
     if not text:
         raise HTTPException(status_code=422, detail="no speech recognized")
     return JSONResponse({"text": text})
+
+
+@app.post("/api/follow-up")
+async def follow_up(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise HTTPException(status_code=422, detail="invalid follow-up request") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="invalid follow-up request")
+
+    symbol, market = normalize_symbol(str(body.get("symbol") or ""))
+    question = str(body.get("question") or "").strip()
+    history = body.get("history")
+    if market != "cn" or not question or len(question) > 1000 or not isinstance(history, list):
+        raise HTTPException(status_code=422, detail="invalid follow-up request")
+
+    clean_history = []
+    for turn in history[-6:]:
+        if not isinstance(turn, dict):
+            continue
+        answers = turn.get("answers")
+        clean_answers = []
+        if isinstance(answers, list):
+            for item in answers[-8:]:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    clean_answers.append({
+                        "agent": str(item.get("agent") or "研究结论")[:40],
+                        "text": text[:2000],
+                    })
+        clean_history.append({
+            "question": str(turn.get("question") or "")[:1000],
+            "answers": clean_answers,
+        })
+    if not clean_history:
+        raise HTTPException(status_code=422, detail="follow-up context is required")
+
+    try:
+        answer = await asyncio.wait_for(
+            asyncio.to_thread(
+                get_llm().follow_up,
+                symbol=symbol,
+                question=question,
+                history=clean_history,
+            ),
+            timeout=120,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="follow-up timed out") from None
+    except Exception:
+        log.exception("single-agent follow-up failed")
+        raise HTTPException(status_code=503, detail="follow-up unavailable") from None
+
+    payload = enforce_dict({
+        "answer": str(answer or "").strip(),
+        "agent": "Chair",
+        "mode": "single-agent",
+        "symbol": symbol,
+    })
+    payload["disclaimer"] = (
+        "本次追问由单一主持 Agent 基于当前会话已有材料回答，未重新取数或启动多智能体审计；"
+        "仅供学习与研究，不构成任何投资建议。"
+    )
+    return JSONResponse(payload)
 
 
 # --- A2A message endpoint --------------------------------------------------
