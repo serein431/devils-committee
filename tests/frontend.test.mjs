@@ -122,9 +122,8 @@ assert.doesNotMatch(html, /谁发言，谁走到前面/);
 assert.match(html, /face-player\[data-side="macro"\]:not\(\.is-active\)/);
 assert.match(html, /face-player:hover\{z-index:20/);
 assert.match(html, /#bEngine,#bMode\{display:none\}/);
-for (const removed of ["AA" + "PL", "NV" + "DA", "TS" + "LA"]) {
-  assert.doesNotMatch(html, new RegExp(removed));
-}
+assert.match(html, /AAPL/);
+assert.match(html, /NVDA/);
 
 let passed = 0;
 const ok = (name, cond) => { assert.ok(cond, name); console.log("  [PASS]", name); passed++; };
@@ -213,6 +212,10 @@ await new Promise(resolve => window.setTimeout(resolve, 12));
 ok("company name resolves to a standard symbol before research",
    fetchCalls.length === fetchCountBeforeCompanyName + 2 &&
    fetchCalls.at(-1).url.includes("600519.SH"));
+ok("Hong Kong symbols normalize to PandaData's four-digit format",
+   window.querySymbol("研究 00700.HK 腾讯") === "0700.HK");
+ok("US tickers are accepted as research symbols",
+   window.querySymbol("研究 AAPL 的基本面") === "AAPL");
 
 // --- drive the streaming renderer directly (no network) --------------------
 window.handleEvent({ stage: "argue", symbol: "600519.SH" });

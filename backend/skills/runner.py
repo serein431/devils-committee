@@ -88,17 +88,18 @@ class SkillRunner:
             request,
             bundle,
         )
-        store = PrecomputedStore(
-            CONFIG.precomputed_dir,
-            CONFIG.precomputed_commit or CONFIG.build_commit,
-        )
         all_results = {item.skill_id: item for item in online}
-        online_factor = all_results.get(FACTOR_SKILL)
-        if online_factor is None or online_factor.status != "success":
-            saved_factor = store.load(FACTOR_SKILL, request.symbol)
-            if saved_factor.status == "success" or online_factor is None:
-                all_results[FACTOR_SKILL] = saved_factor
-        all_results[HPO_SKILL] = store.load(HPO_SKILL, request.symbol)
+        if request.market == "cn":
+            store = PrecomputedStore(
+                CONFIG.precomputed_dir,
+                CONFIG.precomputed_commit or CONFIG.build_commit,
+            )
+            online_factor = all_results.get(FACTOR_SKILL)
+            if online_factor is None or online_factor.status != "success":
+                saved_factor = store.load(FACTOR_SKILL, request.symbol)
+                if saved_factor.status == "success" or online_factor is None:
+                    all_results[FACTOR_SKILL] = saved_factor
+            all_results[HPO_SKILL] = store.load(HPO_SKILL, request.symbol)
         return ResearchEvidence(
             request,
             bundle,

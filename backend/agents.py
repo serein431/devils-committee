@@ -313,6 +313,10 @@ def _deterministic_overall_assessment(
     if market and market.status == "success":
         recent_return = market.metrics.get("return_60d_pct")
         relative = market.metrics.get("relative_to_csi300_60d_pct")
+        relative_label = "相对沪深300近60日"
+        if not isinstance(relative, (int, float)):
+            relative = market.metrics.get("relative_to_benchmark_13w_pct")
+            relative_label = "相对市场默认基准近13周"
         volatility = market.metrics.get("volatility_60d_ann_pct")
         drawdown = market.metrics.get("max_drawdown_120d_pct")
         if isinstance(recent_return, (int, float)):
@@ -322,7 +326,7 @@ def _deterministic_overall_assessment(
         if isinstance(relative, (int, float)):
             target = positives if relative > 0 else negatives if relative < 0 else None
             if target is not None:
-                target.append(f"相对沪深300近60日 {relative:.2f} 个百分点")
+                target.append(f"{relative_label} {relative:.2f} 个百分点")
         if isinstance(volatility, (int, float)) and volatility >= 30:
             negatives.append(f"60日年化波动 {volatility:.2f}%")
         if isinstance(drawdown, (int, float)) and drawdown <= -20:

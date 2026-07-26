@@ -9,8 +9,8 @@
 - 默认开发环境使用确定性的 `mock`，不需要模型、PandaData 或 QuantSkills 凭证。
 - 真实环境需要 Python 3.12、`requirements-real.txt`、Volcengine Ark Endpoint ID、PandaData 账号和 QuantSkills 仓库。
 - LLM 通过 Volcengine Ark 调用，页面和状态接口显示名称为 **DeepSeek V4 Pro**；`LLM_MODEL` 必须填写活动提供的 Endpoint ID，不是显示名称。
-- 当前真实研究只支持 A 股。港股或其他境外市场会返回 `insufficient-evidence`，不会用 mock 补成结果。
-- 每个真实请求先生成公司、财务、估值、市场、行业、资金、股东、事件和宏观九类研究画像，再运行四个在线 QuantSkills、一个项目内指数权重变化研究，并读取 HPO 预计算结果；在线因子研究失败时可读取经过哈希核验的预计算报告。
+- 当前真实研究支持 A 股、港股和美股，代码与公司名会自动识别市场并路由到对应 PandaData 接口。
+- 每个真实请求先生成公司、财务、估值、市场、行业、资金、股东、事件和宏观九类研究画像。A 股继续运行复权、幸存者偏差、指数权重和因子等专属能力；港美股使用其专属行情、财报、估值、行业中位数、一致预期、内部人及公司事件数据，不套用 A 股口径。
 - 公网服务已部署到 `https://devils.corvusapi.org`，提供 A2A v1 JSON-RPC、Task 查询和 SSE 状态事件。
 
 ## 默认开发：离线 mock
@@ -52,7 +52,7 @@ git submodule update --init --recursive
 
 真实研究使用 PandaData 历史数据。缓存键由请求方法、参数、SDK 版本和数据版本计算；Parquet 文件另存 SHA-256。读取缓存时会重新核验哈希。
 
-数据路由不是每次无脑调用所有接口。基础请求会并行读取有效交易日、股票身份、日线与复权、季度财报、指数、资金、股东和公司事件；行业成分、行业宏观、龙虎榜明细、管理层问答和盘中分钟数据根据前置结果或用户问题触发。并发读取失败会在并行队列结束后串行补取，空结果也会缓存，避免把短暂接口失败写成“整只股票资料不足”。
+数据路由按市场自动选择接口。A 股读取交易日、日线与复权、季度财报、指数、资金、股东和公司事件，并按问题动态补取行业宏观、龙虎榜明细和盘中数据；港美股读取各自的日线、公司资料、财务季度报告、市场财务指标、行业中位数、价量指标、一致预期、投资者/内部人持仓及五类公司事件。并发读取失败会在并行队列结束后串行补取，空结果也会缓存。
 
 季度财报 `get_fina_reports` 是基本面主来源，财务快报 `get_fina_performance` 仅作补充。金融企业使用行业专用解释口径，不用经营现金流/利润倍数直接判断盈利质量。
 
@@ -62,12 +62,12 @@ git submodule update --init --recursive
 |---|---|
 | `project-company-context` | 公司名称、行业、企业性质和特殊交易状态 |
 | `project-company-fundamentals` | 营收、利润、现金流、ROE及同比变化 |
-| `project-valuation-snapshot` | PE、PB与同期沪深300估值背景 |
+| `project-valuation-snapshot` | PE、PB；A 股提供沪深300背景，港美股提供行业中位数 |
 | `project-market-behavior` | 20/60/120日收益、相对强弱、波动和回撤 |
 | `project-industry-comparison` | 同行业收益、市值和换手率分位 |
-| `project-capital-flow` | 融资融券、沪深股通、大宗交易和龙虎榜 |
-| `project-ownership-and-capital-actions` | 股东户数、主要股东、质押、增减持、回购和解禁 |
-| `project-corporate-events` | 业绩预告、审计意见、分红、诉讼、担保和重大事件 |
+| `project-capital-flow` | A 股资金数据；港美股成交额、成交量与交易活跃度 |
+| `project-ownership-and-capital-actions` | A 股股东资本行为；港美股投资者、内部人与披露持仓 |
+| `project-corporate-events` | A 股公告事件；港美股一致预期、分红、财务、会议与投资者关系事件 |
 | `project-macro-environment` | 利率、货币以及按行业选择的宏观指标 |
 
 每类画像发布 `direction`、`confidence`、关键指标、数据哈希、截止日期、计算假设和警告。画像用于回答股票本身强在哪里、弱在哪里；数据审计是辅助层，不再替代个股结论。
@@ -99,8 +99,8 @@ git submodule update --init --recursive
 
 ```text
 A2A 请求
-  └─ 研究请求解析：只接受当前支持的 A 股代码
-      └─ 交易日解析与 PandaData 动态数据路由：live 或经哈希核验的 cache
+  └─ 研究请求解析：自动识别 A 股、港股或美股
+      └─ PandaData 市场专属动态数据路由：live 或经哈希核验的 cache
           └─ 九类股票研究画像
               ├─ 四个在线 QuantSkills（每个最多 120 秒）
               ├─ 项目内指数权重变化研究
@@ -117,11 +117,13 @@ A2A 请求
 
 整个请求限制为 600 秒。SSE 会持续发送阶段事件，但不会改变同一请求的时间限制。
 
-## 三个固定研究示例
+## 跨市场固定研究示例
 
 - `601628.SH`：验证保险行业财务口径、盈利压力、相对强弱、股东和宏观画像。
 - `300750.SZ`：验证成长制造的盈利、估值、动力电池行业指标和资金变化。
 - `600519.SH`：验证消费龙头的现金流、估值、股东行为和白酒行业价格指标。
+- `0700.HK`：验证港股财报、行业中位数、一致预期、内部人交易和公司事件。
+- `AAPL`：验证美股行情、财务、价量指标、行业比较和股东披露。
 
 示例文件位于 `tests/examples/`。审计结论取决于实际数据、缓存和预计算报告，文档不预写“必定通过”或“必定标记”。
 

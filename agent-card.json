@@ -1,6 +1,6 @@
 {
   "name": "Devil's Committee — AI Investment Debate Coach",
-  "description": "A multi-agent A-share research coach that explains evidence, audits data and model risks, and never gives buy or sell instructions.",
+  "description": "A multi-agent A/H/US stock research coach that automatically routes market data, explains evidence, audits data and model risks, and never gives buy or sell instructions.",
   "supportedInterfaces": [
     {
       "url": "http://localhost:8080/a2a",
@@ -24,11 +24,12 @@
     {
       "id": "debate_case",
       "name": "debate_case",
-      "description": "Research an A-share question with bull, bear, macro and risk agents, independently audit their initial claims, run one targeted cross-examination round, re-audit the responses, then explain consensus, disagreements and risk boundaries without buy or sell instructions.",
-      "tags": ["a-share", "multi-agent", "research", "audit", "education"],
+      "description": "Research an A-share, Hong Kong or US stock question with bull, bear, macro and risk agents, automatically route to market-specific PandaData evidence, audit the claims, run one targeted cross-examination round, then explain consensus, disagreements and risk boundaries without buy or sell instructions.",
+      "tags": ["a-share", "hong-kong-stock", "us-stock", "multi-agent", "research", "audit", "education"],
       "examples": [
         "研究 600519.SH 的复权、分红、因子和流动性风险",
-        "研究 TSLA 的流动性风险",
+        "研究 0700.HK 腾讯控股的基本面、估值和主要风险",
+        "研究 AAPL 的财务、行业表现和内部人交易",
         "请为 600519.SH 给出明日买卖指令、目标价和收益承诺"
       ],
       "inputModes": ["text/plain", "application/json"],
@@ -37,8 +38,8 @@
     {
       "id": "audit_claims",
       "name": "audit_claims",
-      "description": "Research an A-share question and independently audit its generated claims for model, selection, data and evidence risks. Missing evidence is reported as insufficient rather than passed.",
-      "tags": ["a-share", "audit", "model-risk", "data-risk", "evidence"],
+      "description": "Research an A-share, Hong Kong or US stock question and independently audit its generated claims for model, selection, data and evidence risks. Missing evidence is reported as insufficient rather than passed.",
+      "tags": ["a-share", "hong-kong-stock", "us-stock", "audit", "model-risk", "data-risk", "evidence"],
       "examples": [
         "审计 600519.SH 的复权、分红、因子和流动性证据"
       ],

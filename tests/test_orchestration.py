@@ -71,14 +71,14 @@ def test_research_request_is_accepted_without_reparsing(monkeypatch, evidence_fi
     assert result.meta["end_date"] == request.end_date
 
 
-def test_us_input_returns_structured_insufficient_evidence(monkeypatch):
+def test_invalid_symbol_returns_structured_insufficient_evidence(monkeypatch):
     async def must_not_prepare(self, request):
-        raise AssertionError("unsupported market must stop before data work")
+        raise AssertionError("invalid symbol must stop before data work")
 
     monkeypatch.setattr(SkillRunner, "prepare", must_not_prepare)
-    result = asyncio.run(DebateOrchestrator().run("分析 WXYZ"))
+    result = asyncio.run(DebateOrchestrator().run("分析 1234567"))
 
-    assert result.meta["symbol"] == "WXYZ"
+    assert result.meta["symbol"] == "UNKNOWN"
     assert result.meta["data_status"] == "insufficient-evidence"
     assert result.meta["supported_market"] is False
     assert result.claims == []
@@ -86,7 +86,7 @@ def test_us_input_returns_structured_insufficient_evidence(monkeypatch):
     assert result.consensus == []
     assert result.open_disagreements == []
     assert result.disclaimer
-    assert "当前真实研究只支持 A 股代码。" in result.risk_boundaries
+    assert "请输入有效的 A 股、港股或美股代码。" in result.risk_boundaries
     assert "系统不会用虚拟数据补齐缺失证据。" in result.risk_boundaries
 
 

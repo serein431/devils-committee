@@ -84,6 +84,10 @@ _POPULAR_STOCKS = (
     ("600887.SH", "伊利股份"),
     ("601888.SH", "中国中免"),
     ("300760.SZ", "迈瑞医疗"),
+    ("0700.HK", "腾讯控股"),
+    ("9988.HK", "阿里巴巴-W"),
+    ("AAPL", "苹果"),
+    ("NVDA", "英伟达"),
 )
 
 
@@ -166,7 +170,7 @@ async def follow_up(request: Request) -> JSONResponse:
     symbol, market = normalize_symbol(str(body.get("symbol") or ""))
     question = str(body.get("question") or "").strip()
     history = body.get("history")
-    if market != "cn" or not question or len(question) > 1000 or not isinstance(history, list):
+    if market not in {"cn", "hk", "us"} or not question or len(question) > 1000 or not isinstance(history, list):
         raise HTTPException(status_code=422, detail="invalid follow-up request")
 
     clean_history = []
@@ -220,16 +224,31 @@ async def follow_up(request: Request) -> JSONResponse:
     )
     return JSONResponse(payload)
 def _stock_suggestions_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Keep only Shanghai/Shenzhen A shares from the public symbol directory."""
+    """Keep listed A/H/US equities and reject indexes, funds and other classes."""
 
     suggestions: list[dict[str, str]] = []
     seen: set[str] = set()
     for row in rows:
         code = str(row.get("Code") or row.get("code") or "").strip()
         name = str(row.get("Name") or row.get("name") or "").strip()
-        if not re.fullmatch(r"[036]\d{5}", code) or not name:
+        classify = str(row.get("Classify") or row.get("classify") or "").strip()
+        security_name = str(
+            row.get("SecurityTypeName") or row.get("securityTypeName") or ""
+        ).strip()
+        if not name:
             continue
-        symbol = f"{code}.{'SH' if code.startswith('6') else 'SZ'}"
+        if classify == "AStock" and re.fullmatch(r"[036]\d{5}", code):
+            symbol = f"{code}.{'SH' if code.startswith('6') else 'SZ'}"
+        elif classify == "HK" and security_name == "港股" and re.fullmatch(r"\d{1,5}", code):
+            symbol, market = normalize_symbol(f"{code}.HK")
+            if market != "hk":
+                continue
+        elif classify == "UsStock" and security_name == "美股":
+            symbol, market = normalize_symbol(code)
+            if market != "us":
+                continue
+        else:
+            continue
         if symbol in seen:
             continue
         seen.add(symbol)

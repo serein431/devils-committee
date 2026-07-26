@@ -558,6 +558,146 @@ DATASET_CALLS: dict[str, tuple[str, ParamsFactory]] = {
     ),
 }
 
+
+def _foreign_financial_params(request: ResearchRequest) -> dict[str, Any]:
+    params = _financial_report_params(request)
+    params["symbol"] = request.symbol
+    return params
+
+
+def _dated_foreign_params(request: ResearchRequest) -> dict[str, Any]:
+    return {
+        "symbol": [request.symbol],
+        "start_date": request.start_date,
+        "end_date": request.end_date,
+        "fields": [],
+    }
+
+
+def _foreign_dataset_calls(market: str) -> dict[str, tuple[str, ParamsFactory]]:
+    """Return one logical research schema backed by HK or US endpoints."""
+
+    if market == "hk":
+        methods = {
+            "daily": "get_hk_daily",
+            "stock_detail": "get_hk_detail",
+            "financial_reports": "get_fina_statement",
+            "operating_metrics": "get_stock_operating_indicator",
+            "market_financial": "get_stock_mktfin_indicator",
+            "industry_median": "get_stock_industry_median",
+            "price_volume": "get_stock_pv_indicator",
+            "recommendation_consensus": "get_stock_recommendation_consensus",
+            "noncyclical_consensus": "get_stock_ncycl_consensus",
+            "investor_concentration": "get_stock_investor_concentration",
+            "top20_concentration": "get_stock_top20_concentration",
+            "investor_ranking": "get_stock_investor_ranking",
+            "insider_transactions": "get_stock_insider_trade",
+            "shareholder_holdings": "get_stock_shareholder_holding",
+            "dividend_events": "get_stock_dividend_event",
+            "market_events": "get_stock_market_event",
+            "meeting_events": "get_stock_meeting_event",
+            "financial_events": "get_stock_financial_event",
+            "ir_events": "get_stock_ir_event",
+        }
+    elif market == "us":
+        methods = {
+            "daily": "get_us_daily",
+            "stock_detail": "get_us_detail",
+            "financial_reports": "get_fina_ex",
+            "operating_metrics": "get_stock_operating_metric",
+            "market_financial": "get_stock_mktfin_metric",
+            "industry_median": "get_stock_sector_median",
+            "price_volume": "get_stock_pv_metric",
+            "recommendation_consensus": "get_stock_recommendation_estimate",
+            "noncyclical_consensus": "get_stock_ncycl_estimate",
+            "investor_concentration": "get_stock_investor_centralization",
+            "top20_concentration": "get_stock_top20_centralization",
+            "investor_ranking": "get_stock_investor_leaderboard",
+            "insider_transactions": "get_stock_insider_transaction",
+            "shareholder_holdings": "get_stock_shareholder_report",
+            "dividend_events": "get_stock_dividend_activity",
+            "market_events": "get_stock_market_activity",
+            "meeting_events": "get_stock_meeting_activity",
+            "financial_events": "get_stock_financial_activity",
+            "ir_events": "get_stock_ir_activity",
+        }
+    else:
+        return {}
+
+    calls: dict[str, tuple[str, ParamsFactory]] = {
+        "daily": (
+            methods["daily"],
+            lambda r: {
+                "symbol": [r.symbol],
+                "start_date": r.start_date,
+                "end_date": r.end_date,
+                "fields": [],
+            },
+        ),
+        "stock_detail": (
+            methods["stock_detail"],
+            lambda r: {"symbol": [r.symbol], "fields": [], "status": None},
+        ),
+        "financial_reports": (methods["financial_reports"], _foreign_financial_params),
+        "operating_metrics": (
+            methods["operating_metrics"],
+            lambda r: {
+                "symbol": [r.symbol],
+                "start_year": r.start_date[:4],
+                "end_year": r.end_date[:4],
+                "fields": [],
+            },
+        ),
+        "market_financial": (
+            methods["market_financial"],
+            lambda r: {"symbol": [r.symbol], "fields": []},
+        ),
+        "industry_median": (
+            methods["industry_median"],
+            lambda r: {"symbol": [r.symbol], "fields": []},
+        ),
+        "price_volume": (
+            methods["price_volume"],
+            lambda r: {"symbol": [r.symbol], "fields": []},
+        ),
+        "recommendation_consensus": (
+            methods["recommendation_consensus"],
+            lambda r: {"symbol": [r.symbol], "fields": []},
+        ),
+        "noncyclical_consensus": (
+            methods["noncyclical_consensus"],
+            lambda r: {"symbol": [r.symbol], "fields": []},
+        ),
+        "investor_concentration": (
+            methods["investor_concentration"],
+            lambda r: {"symbol": [r.symbol], "fields": []},
+        ),
+        "top20_concentration": (
+            methods["top20_concentration"],
+            lambda r: {"symbol": [r.symbol], "fields": []},
+        ),
+        "investor_ranking": (
+            methods["investor_ranking"],
+            lambda r: {"symbol": [r.symbol], "fields": [], "max_rank": 20},
+        ),
+    }
+    for name in (
+        "insider_transactions",
+        "shareholder_holdings",
+        "dividend_events",
+        "market_events",
+        "meeting_events",
+        "financial_events",
+        "ir_events",
+    ):
+        calls[name] = (methods[name], _dated_foreign_params)
+    return calls
+
+
+FOREIGN_DATASET_CALLS = {
+    market: _foreign_dataset_calls(market) for market in ("hk", "us")
+}
+
 SENSITIVE_COLUMN_PARTS = {
     "authorization",
     "token",
@@ -607,6 +747,22 @@ VALID_EMPTY_DATASETS = {
     "stock_minute",
     "stock_rt_minute",
     "index_minute",
+    "operating_metrics",
+    "market_financial",
+    "industry_median",
+    "price_volume",
+    "recommendation_consensus",
+    "noncyclical_consensus",
+    "investor_concentration",
+    "top20_concentration",
+    "investor_ranking",
+    "insider_transactions",
+    "shareholder_holdings",
+    "dividend_events",
+    "market_events",
+    "meeting_events",
+    "financial_events",
+    "ir_events",
 }
 
 CORE_DATASET_NAMES = {
@@ -835,7 +991,7 @@ def build_mock_bundle(request: ResearchRequest) -> MarketDataBundle:
 def resolve_request_trading_dates(request: ResearchRequest) -> ResearchRequest:
     """Resolve research boundaries to actual A-share trading dates."""
 
-    if CONFIG.data_mode != "panda" or not request.supported:
+    if CONFIG.data_mode != "panda" or request.market != "cn":
         return request
     try:
         import panda_data  # type: ignore
@@ -883,6 +1039,8 @@ def _resolve_sdk_method(panda_data: Any, method_name: str) -> Callable[..., Any]
 
 
 def _selected_dataset_names(request: ResearchRequest) -> set[str]:
+    if request.market in FOREIGN_DATASET_CALLS:
+        return set(FOREIGN_DATASET_CALLS[request.market])
     names = set(CORE_DATASET_NAMES | DEFAULT_RESEARCH_DATASET_NAMES)
     if _management_detail_requested(request):
         names.add("investor_brief")
@@ -982,6 +1140,8 @@ def _dynamic_calls(
     request: ResearchRequest,
     datasets: dict[str, DatasetArtifact],
 ) -> dict[str, tuple[str, dict[str, Any]]]:
+    if request.market != "cn":
+        return {}
     calls: dict[str, tuple[str, dict[str, Any]]] = {}
     industry_rows = _artifact_records(datasets.get("industry"))
     industry_row = industry_rows[-1] if industry_rows else {}
@@ -1023,6 +1183,8 @@ def _peer_factor_call(
     request: ResearchRequest,
     datasets: dict[str, DatasetArtifact],
 ) -> dict[str, tuple[str, dict[str, Any]]]:
+    if request.market != "cn":
+        return {}
     rows = _artifact_records(datasets.get("industry_peers"))
     active = []
     for row in rows:
@@ -1069,7 +1231,7 @@ def build_market_data_bundle(request: ResearchRequest) -> MarketDataBundle:
     if not request.supported:
         return MarketDataBundle.insufficient(
             request.symbol,
-            "current live research supports A shares only",
+            "supported stock symbol required",
         )
     if CONFIG.data_mode == "mock":
         return build_mock_bundle(request)
@@ -1085,9 +1247,14 @@ def build_market_data_bundle(request: ResearchRequest) -> MarketDataBundle:
 
     datasets: dict[str, DatasetArtifact] = {}
     warnings: list[str] = []
+    registry = (
+        DATASET_CALLS
+        if request.market == "cn"
+        else FOREIGN_DATASET_CALLS.get(request.market, {})
+    )
     selected = _selected_dataset_names(request)
     calls = {
-        name: (DATASET_CALLS[name][0], DATASET_CALLS[name][1](request))
+        name: (registry[name][0], registry[name][1](request))
         for name in selected
     }
     missing_exists = any(

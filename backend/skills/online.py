@@ -526,8 +526,9 @@ def _liquidity_rows(
             "portfolio_value and spread_bps are required; no demo values substituted",
         )
     daily = _read_records(bundle, "daily")
-    amounts = [
-        _number(
+    amounts = []
+    for row in daily:
+        amount = _number(
             _first(
                 row,
                 "amount",
@@ -536,8 +537,11 @@ def _liquidity_rows(
                 "trading_value",
             )
         )
-        for row in daily
-    ]
+        if amount <= 0:
+            volume = _number(_first(row, "volume"))
+            close = _number(_first(row, "close", "alt_close"))
+            amount = volume * close if volume > 0 and close > 0 else 0.0
+        amounts.append(amount)
     amounts = [amount for amount in amounts if amount > 0]
     avg_amount = sum(amounts) / len(amounts) if amounts else 0.0
     params, assumptions = liquidity_parameters(request, avg_amount)
@@ -1067,6 +1071,32 @@ class OnlineSkillRunner:
         request: ResearchRequest,
         bundle: MarketDataBundle,
     ) -> list[SkillResult]:
+        if request.market != "cn":
+            if request.portfolio_value is None or request.spread_bps is None:
+                return []
+            try:
+                return [
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self.run_liquidity, request, bundle),
+                        timeout=self.timeout_sec,
+                    )
+                ]
+            except asyncio.TimeoutError:
+                return [
+                    error_result(
+                        "skill-portfolio-liquidity-stress-test",
+                        bundle,
+                        "skill timed out",
+                    )
+                ]
+            except Exception:
+                return [
+                    error_result(
+                        "skill-portfolio-liquidity-stress-test",
+                        bundle,
+                        "skill execution failed",
+                    )
+                ]
         calls: list[
             tuple[str, Callable[[ResearchRequest, MarketDataBundle], SkillResult]]
         ] = [

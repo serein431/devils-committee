@@ -27,8 +27,14 @@ def normalize_symbol(value: str) -> tuple[str, str]:
         prefix, digits, suffix = a_share.groups()
         exchange = suffix or prefix or ("SH" if digits.startswith("6") else "SZ")
         return f"{digits}.{exchange}", "cn"
-    if re.fullmatch(r"\d{5}\.HK", raw) or re.fullmatch(r"[A-Z]{1,5}", raw):
-        return raw, "unsupported"
+    hk_share = re.fullmatch(r"(\d{1,5})\.HK", raw)
+    if hk_share:
+        digits = hk_share.group(1).lstrip("0") or "0"
+        if len(digits) <= 4:
+            return f"{digits.zfill(4)}.HK", "hk"
+        return raw, "hk"
+    if re.fullmatch(r"[A-Z][A-Z0-9]{0,9}(?:[.-][A-Z0-9]{1,4})?", raw):
+        return raw, "us"
     return "UNKNOWN", "unknown"
 
 
@@ -51,8 +57,15 @@ def symbol_from_text(text: str) -> tuple[str, str]:
             text[candidate.start():],
         )
         return normalize_symbol(match.group(0)) if match else ("UNKNOWN", "unknown")
+    hk = re.search(
+        r"(?i)(?<![A-Za-z0-9_])(\d{1,5}\.HK)(?![A-Za-z0-9_])",
+        text,
+    )
+    if hk:
+        return normalize_symbol(hk.group(1))
     for match in re.finditer(
-        r"(?<![A-Za-z0-9_])(\d{5}\.HK|[A-Z]{1,5})(?![A-Za-z0-9_])",
+        r"(?<![A-Za-z0-9_])([A-Z][A-Z0-9]{0,9}(?:[.-][A-Z0-9]{1,4})?)"
+        r"(?![A-Za-z0-9_])",
         text,
     ):
         candidate = match.group(1)
@@ -73,7 +86,7 @@ class ResearchRequest:
 
     @property
     def supported(self) -> bool:
-        return self.market == "cn"
+        return self.market in {"cn", "hk", "us"}
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "ResearchRequest":

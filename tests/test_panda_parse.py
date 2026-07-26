@@ -202,6 +202,41 @@ def test_extended_research_registry_uses_high_value_panda_endpoints():
     assert {name: DATASET_CALLS[name][0] for name in expected} == expected
 
 
+def test_foreign_market_registry_routes_complete_hk_and_us_research_sets():
+    from backend.skills.panda import FOREIGN_DATASET_CALLS, _selected_dataset_names
+
+    expected_names = {
+        "daily",
+        "stock_detail",
+        "financial_reports",
+        "operating_metrics",
+        "market_financial",
+        "industry_median",
+        "price_volume",
+        "recommendation_consensus",
+        "noncyclical_consensus",
+        "investor_concentration",
+        "top20_concentration",
+        "investor_ranking",
+        "insider_transactions",
+        "shareholder_holdings",
+        "dividend_events",
+        "market_events",
+        "meeting_events",
+        "financial_events",
+        "ir_events",
+    }
+    hk = ResearchRequest("0700.HK", "hk", "分析腾讯", "20240101", "20260724")
+    us = ResearchRequest("AAPL", "us", "分析苹果", "20240101", "20260724")
+
+    assert _selected_dataset_names(hk) == expected_names
+    assert _selected_dataset_names(us) == expected_names
+    assert FOREIGN_DATASET_CALLS["hk"]["daily"][0] == "get_hk_daily"
+    assert FOREIGN_DATASET_CALLS["hk"]["financial_reports"][0] == "get_fina_statement"
+    assert FOREIGN_DATASET_CALLS["us"]["daily"][0] == "get_us_daily"
+    assert FOREIGN_DATASET_CALLS["us"]["financial_reports"][0] == "get_fina_ex"
+
+
 def test_sector_macro_router_covers_battery_and_food_industries():
     from backend.skills.panda import MACRO_SECTOR_BY_INDUSTRY
 

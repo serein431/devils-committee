@@ -10,10 +10,12 @@ def test_normalizes_supported_a_share_symbols():
     assert normalize_symbol("601318.SH") == ("601318.SH", "cn")
 
 
-def test_marks_hk_and_us_as_unsupported():
-    assert normalize_symbol("00700.HK") == ("00700.HK", "unsupported")
-    assert normalize_symbol("WXYZ") == ("WXYZ", "unsupported")
-    assert normalize_symbol("AI") == ("AI", "unsupported")
+def test_normalizes_supported_hk_and_us_symbols():
+    assert normalize_symbol("00700.HK") == ("0700.HK", "hk")
+    assert normalize_symbol("9988.hk") == ("9988.HK", "hk")
+    assert normalize_symbol("WXYZ") == ("WXYZ", "us")
+    assert normalize_symbol("AI") == ("AI", "us")
+    assert normalize_symbol("BRK.B") == ("BRK.B", "us")
 
 
 def test_text_a_share_suffix_overrides_prefix():
@@ -30,10 +32,15 @@ def test_text_symbol_allows_chinese_adjacency():
 
 
 def test_text_symbol_skips_non_ticker_words():
-    assert symbol_from_text("BUY WXYZ NOW") == ("WXYZ", "unsupported")
-    assert symbol_from_text("SELL QWER") == ("QWER", "unsupported")
-    assert symbol_from_text("the ETF for ZZZZ") == ("ZZZZ", "unsupported")
+    assert symbol_from_text("BUY WXYZ NOW") == ("WXYZ", "us")
+    assert symbol_from_text("SELL QWER") == ("QWER", "us")
+    assert symbol_from_text("the ETF for ZZZZ") == ("ZZZZ", "us")
     assert symbol_from_text("分析 AI 行业") == ("UNKNOWN", "unknown")
+
+
+def test_text_symbol_routes_hk_and_us_markets():
+    assert symbol_from_text("分析 00700.HK 腾讯") == ("0700.HK", "hk")
+    assert symbol_from_text("分析 AAPL 的基本面") == ("AAPL", "us")
 
 
 def test_text_symbol_rejects_invalid_suffix_continuation():

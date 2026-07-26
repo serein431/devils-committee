@@ -124,6 +124,122 @@ def test_profiles_turn_panda_data_into_company_research(monkeypatch):
     assert market.metrics["industry"] == "非银金融"
 
 
+def test_hk_profiles_use_foreign_financial_valuation_and_ownership_fields(monkeypatch):
+    names = (
+        "daily",
+        "stock_detail",
+        "financial_reports",
+        "price_volume",
+        "industry_median",
+        "recommendation_consensus",
+        "noncyclical_consensus",
+        "investor_concentration",
+        "investor_ranking",
+        "insider_transactions",
+        "shareholder_holdings",
+        "dividend_events",
+        "financial_events",
+        "ir_events",
+    )
+    bundle = MarketDataBundle(
+        "0700.HK",
+        "success",
+        "cache",
+        {name: _artifact(name) for name in names},
+    )
+    rows = {
+        "daily": [
+            {
+                "date": f"2025{index // 28 + 1:02d}{index % 28 + 1:02d}",
+                "close": 300.0 + index,
+                "alt_close": 295.0 + index,
+                "volume": 1_000_000 + index * 100,
+                "amount": 350_000_000 + index * 100_000,
+            }
+            for index in range(130)
+        ],
+        "stock_detail": [{
+            "symbol": "0700.HK",
+            "cn_name": "腾讯控股",
+            "listed_date": "20040616",
+            "status": 1,
+            "industry_group": "Software & IT Services",
+        }],
+        "financial_reports": [
+            {
+                "fy_period": "FY2024Q2",
+                "date": "20240827",
+                "currency": "CNY",
+                "is_revenue_business_total": 320_000_000_000,
+                "is_net_income": 89_000_000_000,
+                "cfs_net_cf_operating": 131_000_000_000,
+                "bs_total_assets": 1_650_000_000_000,
+                "bs_total_liabilities": 727_000_000_000,
+                "is_basic_eps_inc_exord": 9.5,
+            },
+            {
+                "fy_period": "FY2025Q2",
+                "date": "20250826",
+                "currency": "CNY",
+                "is_revenue_business_total": 365_000_000_000,
+                "is_net_income": 103_000_000_000,
+                "cfs_net_cf_operating": 156_000_000_000,
+                "bs_total_assets": 2_010_000_000_000,
+                "bs_total_liabilities": 810_000_000_000,
+                "is_basic_eps_inc_exord": 11.3,
+            },
+        ],
+        "price_volume": [{
+            "pv_market_cap": 3_950_000_000_000,
+            "pv_market_cap_currency": "HKD",
+            "pv_market_cap_date": "20260724",
+            "pv_rel_return_13w": -8.3,
+            "pv_avg_val_3m": 8_000_000_000,
+        }],
+        "industry_median": [{
+            "date": "20260724",
+            "industry_name": "Software & IT Services",
+            "imed_pe_ttm": 25.0,
+            "imed_pb_ttm": 3.2,
+            "imed_roe_avg_common_ttm": 16.0,
+        }],
+        "recommendation_consensus": [{
+            "strong_buy_num": 20,
+            "buy_num": 15,
+            "hold": 10,
+            "sell_num": 2,
+            "strong_sell_num": 0,
+            "recommendations_num": 47,
+            "mean": 1.8,
+        }],
+        "noncyclical_consensus": [{
+            "indicator": "TP", "mean": 520.0, "currency": "HKD", "included_estimates_num": 40,
+        }],
+        "investor_concentration": [{"total_investors": 120, "investor_outstanding_ratio": 48.0}],
+        "investor_ranking": [{"info_date": "20260701", "investor_outstanding_ratio": 5.0, "rank": 1}],
+        "insider_transactions": [{"info_date": "20260701", "transaction_date": "20260701", "adjusted_trade_shares": -1000}],
+        "shareholder_holdings": [{"holding_date": "20260630", "outstanding_ratio": 5.0, "sharehold_change": 500}],
+        "dividend_events": [{"publish_date": "20260701", "excute_date": "20260720", "number": 3.0, "currency": "HKD"}],
+        "financial_events": [{"info_date": "20260702", "start_date": "20260715", "event_type": "EarningsCallsAndPresentations"}],
+        "ir_events": [{"info_date": "20260703", "start_date": "20260716", "event_type": "CorporateInvestorRoadshow"}],
+    }
+    monkeypatch.setattr(research, "_read_records", lambda bundle, name: rows.get(name, []))
+    request = ResearchRequest(
+        "0700.HK", "hk", "研究腾讯", "20250101", "20260724"
+    )
+
+    profiles = research.build_research_profiles(request, bundle)
+
+    assert profiles[research.COMPANY_PROFILE_ID].metrics["company_name"] == "腾讯控股"
+    assert profiles[research.FUNDAMENTAL_PROFILE_ID].metrics["revenue_yoy_pct"] > 14
+    assert profiles[research.VALUATION_PROFILE_ID].metrics["market_cap_currency"] == "HKD"
+    assert profiles[research.MARKET_PROFILE_ID].metrics["relative_to_benchmark_13w_pct"] == -8.3
+    assert profiles[research.INDUSTRY_PROFILE_ID].status == "success"
+    assert profiles[research.FLOW_PROFILE_ID].status == "success"
+    assert profiles[research.OWNERSHIP_PROFILE_ID].metrics["insider_transaction_count"] == 1
+    assert profiles[research.EVENT_PROFILE_ID].metrics["analyst_recommendation_count"] == 47
+
+
 def test_extended_profiles_cover_peers_flows_ownership_events_and_macro(monkeypatch):
     names = (
         "stock_detail",

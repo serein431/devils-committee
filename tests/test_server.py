@@ -171,11 +171,12 @@ def test_agent_card_served_and_url_injected():
     assert {s["id"] for s in card["skills"]} == {"debate_case", "audit_claims"}
 
 
-def test_agent_card_has_normal_insufficient_and_risk_boundary_examples():
+def test_agent_card_has_cross_market_and_risk_boundary_examples():
     card = client.get("/.well-known/agent-card.json").json()
     rendered = json.dumps(card, ensure_ascii=False)
     assert "600519.SH" in rendered
-    assert "TSLA" in rendered
+    assert "0700.HK" in rendered
+    assert "AAPL" in rendered
     assert "明日买卖指令" in rendered
     assert "your-host" not in rendered and "your-repo" not in rendered
 
@@ -192,7 +193,8 @@ def test_agent_card_declares_a2a_v1_jsonrpc_and_public_auth_consistently():
     assert "securitySchemes" not in card
     assert "securityRequirements" not in card
     rendered = json.dumps(card, ensure_ascii=False)
-    assert "研究 TSLA 的流动性风险" in rendered
+    assert "研究 0700.HK 腾讯控股" in rendered
+    assert "研究 AAPL" in rendered
     assert "明日买卖指令" in rendered
 
 
@@ -276,11 +278,24 @@ def test_weird_input_still_resolves_a_symbol():
 
 
 def test_unsupported_market_returns_explained_result_not_server_error():
-    response = client.post("/a2a", json={"topic": "分析 WXYZ"})
+    response = client.post("/a2a", json={"topic": "分析 1234567"})
     assert response.status_code == 200
     result = response.json()["result"]
     assert result["meta"]["data_status"] == "insufficient-evidence"
     assert result["claims"] == []
+
+
+def test_stock_search_keeps_hk_us_and_rejects_index_rows():
+    rows = [
+        {"Code": "00700", "Name": "腾讯控股", "Classify": "HK", "SecurityTypeName": "港股"},
+        {"Code": "AAPL", "Name": "苹果", "Classify": "UsStock", "SecurityTypeName": "美股"},
+        {"Code": "000847", "Name": "腾讯济安", "Classify": "Index", "SecurityTypeName": "指数"},
+    ]
+
+    assert a2a_server._stock_suggestions_from_rows(rows) == [
+        {"symbol": "0700.HK", "name": "腾讯控股"},
+        {"symbol": "AAPL", "name": "苹果"},
+    ]
 
 
 def test_bearer_auth_enforced_when_configured(monkeypatch):
