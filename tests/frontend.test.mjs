@@ -149,6 +149,9 @@ ok("stock input accepts names through an accessible suggestion list",
    document.getElementById("stockSuggestions").getAttribute("role") === "listbox");
 ok("first screen tells people they can enter a company name",
    document.querySelector(".stock-help").textContent.includes("公司名"));
+ok("server speech failure falls back to browser recognition",
+   html.includes("startVoiceInput(false,true)") &&
+   html.includes("在线转写不可用，正在改用浏览器识别"));
 
 // --- browser-native voice input/output -------------------------------------
 for (const id of ["voiceInput", "voiceOutput", "voicePause", "voiceStop", "voiceStatus"]) {

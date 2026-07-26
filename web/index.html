@@ -695,7 +695,12 @@ async function startBackendVoiceInput(){
         const payload=await response.json();
         if(!response.ok||!payload.text)throw new Error("transcription failed");
         acceptVoiceQuery(payload.text);
-      }catch(_){setVoiceStatus("语音转写失败，请重试",true);}
+      }catch(_){
+        if(SpeechRecognitionAPI){
+          setVoiceStatus("在线转写不可用，正在改用浏览器识别…");
+          setTimeout(()=>startVoiceInput(false,true),120);
+        }else setVoiceStatus("语音转写失败，请改用文字输入",true);
+      }
     };
     backendRecorder.start(250);recognitionActive=true;updateRecognitionButton();setVoiceStatus("正在录音…");
     backendVoiceTimer=setTimeout(()=>{if(backendRecorder?.state==="recording")backendRecorder.stop();},18000);
@@ -705,12 +710,12 @@ async function startBackendVoiceInput(){
     setVoiceStatus(denied?"麦克风权限未开启，请在地址栏允许麦克风后重试":"无法启动麦克风",true);
   }
 }
-function startVoiceInput(retrying=false){
+function startVoiceInput(retrying=false,forceBrowser=false){
   if(backendRecorder?.state==="recording"){backendRecorder.stop();return;}
   if(recognitionActive){recognition.stop();return;}
   if(window.isSecureContext===false){setVoiceStatus("语音输入需要 HTTPS 或 localhost",true);return;}
   if(researchRunning)return;
-  if(BACKEND_RECORDING_SUPPORTED){startBackendVoiceInput();return;}
+  if(BACKEND_RECORDING_SUPPORTED&&!forceBrowser){startBackendVoiceInput();return;}
   if(!SpeechRecognitionAPI)return;
   if(!retrying){stopNarration();recognitionFinal="";recognitionCandidate="";voiceNetworkRetries=0;}
   recognitionFailed=false;
@@ -736,7 +741,7 @@ function startVoiceInput(retrying=false){
   recognition.onend=()=>{
     const query=normalizeVoiceQuery(recognitionCandidate||recognitionFinal);
     recognitionActive=false;recognition=null;updateRecognitionButton();
-    if(retryOnEnd){setTimeout(()=>startVoiceInput(true),350);return;}
+    if(retryOnEnd){setTimeout(()=>startVoiceInput(true,true),350);return;}
     if(recognitionFailed||!query)return;
     acceptVoiceQuery(query);
   };
