@@ -657,7 +657,13 @@ async def a2a(
         if not isinstance(body, dict):
             raise ValueError("request body must be an object")
     except (TypeError, ValueError, json.JSONDecodeError):
-        return JSONResponse(status_code=422, content={"detail": "invalid request"})
+        query_topic = (request.query_params.get("topic") or "").strip()
+        if not query_topic:
+            return JSONResponse(status_code=422, content={"detail": "invalid request"})
+        body = {
+            "topic": query_topic,
+            "skill": request.query_params.get("skill") or "debate_case",
+        }
     jsonrpc = _is_jsonrpc(body)
     request_id = body.get("id") if jsonrpc else None
     method = body.get("method") if jsonrpc else None

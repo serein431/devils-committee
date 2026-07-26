@@ -238,6 +238,27 @@ def test_sse_stream_yields_result_event():
     assert any('"result"' in s for s in stages)
 
 
+def test_sse_accepts_query_topic_when_webview_strips_post_body(monkeypatch):
+    async def fake_stream(self, research_request, pace=0):
+        assert research_request.question == "600519.SH 灵光兼容测试"
+        yield {
+            "stage": "result",
+            "result": _minimal_result(research_request.symbol).to_dict(),
+        }
+
+    monkeypatch.setattr(a2a_server.DebateOrchestrator, "stream", fake_stream)
+    with client.stream(
+        "POST",
+        "/a2a?stream=1&pace=0&skill=debate_case&topic=600519.SH%20%E7%81%B5%E5%85%89%E5%85%BC%E5%AE%B9%E6%B5%8B%E8%AF%95",
+        content=b"",
+        headers={"Content-Type": "application/json"},
+    ) as response:
+        assert response.status_code == 200
+        events = [line for line in response.iter_lines() if line.startswith("data:")]
+
+    assert any('"stage": "result"' in event for event in events)
+
+
 def test_a2a_jsonrpc_message_send_returns_a_legacy_agent_message(monkeypatch):
     async def fake_run(self, research_request):
         assert research_request.question == "研究 600519.SH 的复权风险"

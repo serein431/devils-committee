@@ -1165,10 +1165,11 @@ async function run(){
   $("#debateSec").classList.remove("hidden");
   document.querySelectorAll('.pstage').forEach(p=>p.classList.remove('on','done'));
   setStage("开庭：4 个研究 Agent 并行取证，审计与主持随后加入",true);
+  const requestUrl=`/a2a?stream=1&skill=debate_case&topic=${encodeURIComponent(requestTopic)}`;
   let streamController=null;
   try{
     streamController=typeof AbortController==="function"?new AbortController():null;
-    const res=await fetch("/a2a?stream=1",{method:"POST",headers:{"Content-Type":"application/json","Accept":"text/event-stream"},
+    const res=await fetch(requestUrl,{method:"POST",headers:{"Content-Type":"application/json","Accept":"text/event-stream"},
       body:JSON.stringify({skill:"debate_case",topic:requestTopic}),signal:streamController?.signal});
     if(!res.ok||!res.body)throw new Error("stream unavailable");
     await readSseResponse(res);
@@ -1176,11 +1177,11 @@ async function run(){
     try{streamController?.abort();}catch(_){}
     showCompatibilityProgress();
     try{
-      await readSseWithXhr("/a2a?stream=1",{skill:"debate_case",topic:requestTopic});
+      await readSseWithXhr(requestUrl,{skill:"debate_case",topic:requestTopic});
       return;
     }catch(_){}
     try{
-      const r=await fetch("/a2a",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:requestTopic})});
+      const r=await fetch(`/a2a?topic=${encodeURIComponent(requestTopic)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:requestTopic})});
       if(!r.ok)throw new Error("request failed");
       const d=(await r.json()).result;
       await handleEvent({stage:"argue",symbol:(d.meta||{}).symbol});

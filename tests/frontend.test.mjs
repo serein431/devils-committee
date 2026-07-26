@@ -163,6 +163,7 @@ ok("final voice transcript normalizes continuous Chinese digits",
 ok("voice recognition considers multiple alternatives", recognition.maxAlternatives === 3);
 ok("recognition end submits exactly once",
    fetchCalls.length === 1 &&
+   fetchCalls[0].url.includes("topic=%E7%A0%94%E7%A9%B6600519") &&
    JSON.parse(fetchCalls[0].options.body).topic === "研究600519");
 document.getElementById("voiceStop").click();
 
@@ -516,7 +517,8 @@ await new Promise(resolve => window.setTimeout(resolve, 120));
 ok("stalled WebView stream falls back to the regular endpoint",
    stalledFetchCalls.length === 2 &&
    stalledFetchCalls[0].url.includes("stream=1") &&
-   stalledFetchCalls[1].url === "/a2a");
+   stalledFetchCalls[1].url.startsWith("/a2a?topic=") &&
+   stalledFetchCalls[1].url.includes("WebView%20%E6%B5%81%E5%BC%8F%E5%85%BC%E5%AE%B9%E6%B5%8B%E8%AF%95"));
 
 // Lingguang's WebView has been observed reaching the server with an invalid
 // fetch body (HTTP 422). Retry the same SSE request through XMLHttpRequest,
