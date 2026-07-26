@@ -122,6 +122,32 @@ def test_follow_up_requires_existing_conversation_context():
     })
 
     assert response.status_code == 422
+def test_stock_search_resolves_names_without_exposing_credentials(monkeypatch):
+    async def fake_search(query):
+        assert query == "茅台"
+        return [{"symbol": "600519.SH", "name": "贵州茅台"}]
+
+    monkeypatch.setattr(a2a_server, "_search_public_stock_directory", fake_search)
+    response = client.get("/api/stocks", params={"q": "茅台"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "results": [{"symbol": "600519.SH", "name": "贵州茅台"}]
+    }
+
+
+def test_stock_search_falls_back_to_popular_directory(monkeypatch):
+    async def unavailable(_query):
+        raise RuntimeError("directory unavailable")
+
+    monkeypatch.setattr(a2a_server, "_search_public_stock_directory", unavailable)
+    response = client.get("/api/stocks", params={"q": "宁德"})
+
+    assert response.status_code == 200
+    assert response.json()["results"][0] == {
+        "symbol": "300750.SZ",
+        "name": "宁德时代",
+    }
 
 
 def test_avatar_assets_are_served_as_webp():

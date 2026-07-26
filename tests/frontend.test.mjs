@@ -102,7 +102,9 @@ const dom = new JSDOM(html, {
       return {
         ok: true,
         body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }) }) },
-        json: async () => ({ result: {} }),
+        json: async () => String(url).startsWith("/api/stocks")
+          ? ({ results: [{ symbol: "600519.SH", name: "贵州茅台" }] })
+          : ({ result: {} }),
       };
     };
   },
@@ -141,6 +143,12 @@ ok("research details begin after the face stage",
    document.getElementById("faceStage").compareDocumentPosition(document.getElementById("detailsStart")) & window.Node.DOCUMENT_POSITION_FOLLOWING);
 ok("stream controls include pause and show-all",
    document.getElementById("stagePause") && document.getElementById("stageRevealAll"));
+ok("stock input accepts names through an accessible suggestion list",
+   document.getElementById("q").getAttribute("role") === "combobox" &&
+   document.getElementById("q").getAttribute("aria-controls") === "stockSuggestions" &&
+   document.getElementById("stockSuggestions").getAttribute("role") === "listbox");
+ok("first screen tells people they can enter a company name",
+   document.querySelector(".stock-help").textContent.includes("公司名"));
 
 // --- browser-native voice input/output -------------------------------------
 for (const id of ["voiceInput", "voiceOutput", "voicePause", "voiceStop", "voiceStatus"]) {
@@ -186,6 +194,22 @@ await new Promise(resolve => window.setTimeout(resolve, 5));
 ok("five-digit A-share code is rejected before sending a request",
    fetchCalls.length === fetchCountBeforeInvalidCode &&
    document.getElementById("stageQuote").textContent.includes("6 位"));
+
+const fetchCountBeforeBareCode = fetchCalls.length;
+document.getElementById("q").value = "600519";
+document.getElementById("go").click();
+await new Promise(resolve => window.setTimeout(resolve, 8));
+ok("bare six-digit code still starts research",
+   fetchCalls.length === fetchCountBeforeBareCode + 1 &&
+   fetchCalls.at(-1).url.includes("600519"));
+
+const fetchCountBeforeCompanyName = fetchCalls.length;
+document.getElementById("q").value = "贵州茅台";
+document.getElementById("go").click();
+await new Promise(resolve => window.setTimeout(resolve, 12));
+ok("company name resolves to a standard symbol before research",
+   fetchCalls.length === fetchCountBeforeCompanyName + 2 &&
+   fetchCalls.at(-1).url.includes("600519.SH"));
 
 // --- drive the streaming renderer directly (no network) --------------------
 window.handleEvent({ stage: "argue", symbol: "600519.SH" });

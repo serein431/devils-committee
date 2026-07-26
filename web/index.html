@@ -57,7 +57,8 @@
   .hero .lead b{color:var(--ink);font-weight:600}
   .cmd{display:flex;align-items:center;gap:8px;margin:18px 0 6px;background:var(--panel);border:1px solid var(--line2);border-radius:5px;padding:11px 13px}
   .cmd .caret{color:var(--good)}
-  .cmd input{flex:1;min-width:0;background:transparent;border:0;outline:none;color:var(--ink);font-family:var(--mono);font-size:14px;caret-color:var(--good)}
+  .stock-picker{position:relative;flex:1;min-width:0}
+  .cmd input{width:100%;min-width:0;background:transparent;border:0;outline:none;color:var(--ink);font-family:var(--mono);font-size:14px;caret-color:var(--good)}
   .cmd input::placeholder{color:var(--dim)}
   .cmd button{background:var(--crit);color:#fff;border:0;border-radius:4px;padding:8px 18px;font-family:var(--mono);
     font-weight:700;letter-spacing:1px;cursor:pointer;font-size:12px}
@@ -75,6 +76,17 @@
   .chips{display:flex;gap:6px;flex-wrap:wrap}
   .chip{background:var(--panel2);border:1px solid var(--line);color:var(--sub);border-radius:3px;padding:4px 9px;font-size:11px;cursor:pointer}
   .chip:hover{color:var(--ink);border-color:var(--line2)}
+  .stock-suggestions{position:absolute;left:-8px;right:-8px;bottom:calc(100% + 16px);z-index:40;display:none;
+    max-height:286px;overflow-y:auto;border:1px solid var(--line2);border-radius:7px;background:rgba(16,19,21,.98);
+    box-shadow:0 22px 70px rgba(0,0,0,.55);backdrop-filter:blur(14px);padding:5px}
+  .stock-suggestions.open{display:block}
+  .stock-option{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;width:100%;padding:10px 11px;
+    border:0;border-radius:4px;background:transparent;color:var(--ink);font:13px/1.25 var(--sans);text-align:left;cursor:pointer}
+  .stock-option:hover,.stock-option.active{background:var(--panel3)}
+  .stock-option .stock-name{font-weight:650}.stock-option .stock-symbol{color:var(--accent);font:11px/1.4 var(--mono)}
+  .stock-empty{padding:12px;color:var(--sub);font:12px/1.5 var(--sans)}
+  .stock-help{display:flex;justify-content:center;gap:8px;margin:0 0 7px;color:var(--sub);font:11px/1.4 var(--sans)}
+  .stock-help b{color:var(--ink);font-weight:600}
 
   /* ---- first-screen character debate ---- */
   .face-stage{position:relative;min-height:calc(100svh - 44px);display:flex;flex-direction:column;
@@ -174,6 +186,7 @@
     .stage-controls{padding-bottom:12px}.stage-controls .cmd{gap:5px;padding:8px 9px}.stage-controls .cmd button{padding:8px 10px}
     .stage-controls .cmd .icon-btn{flex-basis:32px;width:32px;height:32px;padding:0}
     .stage-controls .cmd input{font-size:13px}.stage-audio button{width:24px;height:24px}
+    .stock-suggestions{position:fixed;left:10px;right:10px;bottom:76px;max-height:44vh}.stock-help{font-size:10.5px}
     .stage-controls .chips{display:none}.scroll-cue{margin-top:8px}
   }
 
@@ -361,13 +374,18 @@
     <div class="stage-controls">
       <div class="cmd">
         <span class="caret">&gt;</span>
-        <input id="q" placeholder="输入 A 股研究问题，如：600519.SH 的复权、分红、因子和流动性风险" autocomplete="off" spellcheck="false" />
+        <div class="stock-picker">
+          <input id="q" placeholder="输入股票名称或代码，如：贵州茅台、600519" autocomplete="off" spellcheck="false"
+            role="combobox" aria-autocomplete="list" aria-controls="stockSuggestions" aria-expanded="false" />
+          <div class="stock-suggestions" id="stockSuggestions" role="listbox" aria-label="股票搜索结果"></div>
+        </div>
         <button id="voiceInput" class="icon-btn" type="button" aria-label="开始语音输入" title="开始语音输入">🎙</button>
         <button id="voiceOutput" class="icon-btn" type="button" aria-label="关闭自动播报" title="关闭自动播报" aria-pressed="true">🔊</button>
         <button id="go">开庭 ⏎</button>
         <button id="newQuestion" class="secondary hidden" type="button">新提问</button>
       </div>
       <div class="voice-status" id="voiceStatus" aria-live="polite"></div>
+      <div class="stock-help"><b>不知道代码？</b><span>直接输入公司名，从候选中选择</span></div>
       <div class="chips" id="chips"></div>
       <a class="scroll-cue" href="#detailsStart">↓ 往下看完整证据</a>
     </div>
@@ -473,6 +491,15 @@ let backendRecorder=null,backendVoiceStream=null,backendVoiceChunks=[],backendVo
 let speechVoiceCatalogReady=false,narrationQueue=[],narrationBusy=false;
 let speechToken=0,speechWatchdog=0,speechWatchdogFallback=null,activeUtterance=null,speechPaused=false;
 let conversationRoot="",conversationSymbol="",conversationHistory=[],conversationRound=0,activeQuestion="";
+const POPULAR_STOCKS=[
+  {symbol:"600519.SH",name:"贵州茅台"},{symbol:"300750.SZ",name:"宁德时代"},
+  {symbol:"601318.SH",name:"中国平安"},{symbol:"000858.SZ",name:"五粮液"},
+  {symbol:"000333.SZ",name:"美的集团"},{symbol:"002594.SZ",name:"比亚迪"},
+  {symbol:"601899.SH",name:"紫金矿业"},{symbol:"600036.SH",name:"招商银行"},
+  {symbol:"600900.SH",name:"长江电力"},{symbol:"300059.SZ",name:"东方财富"},
+  {symbol:"000001.SZ",name:"平安银行"},{symbol:"600030.SH",name:"中信证券"}
+];
+let stockResults=[],stockActiveIndex=-1,stockLookupTimer=0,stockLookupSeq=0,stockResolving=false;
 
 function savedVoicePreference(){
   if(!SPEECH_OUTPUT_SUPPORTED)return false;
@@ -941,13 +968,79 @@ function querySymbol(value){
   const match=String(value||"").match(/(?:(?:SH|SZ)\s*)?(\d{6})(?:\.(?:SH|SZ))?/i);
   return match?match[1]:"";
 }
+function normalizedStockSymbol(code){
+  const digits=String(code||"").match(/\d{6}/)?.[0]||"";
+  return digits?`${digits}.${digits.startsWith("6")?"SH":"SZ"}`:"";
+}
+function hideStockSuggestions(){
+  const box=$("#stockSuggestions");box.classList.remove("open");box.innerHTML="";
+  stockResults=[];stockActiveIndex=-1;$("#q").setAttribute("aria-expanded","false");
+}
+function paintStockActive(){
+  document.querySelectorAll("#stockSuggestions .stock-option").forEach((button,index)=>{
+    button.classList.toggle("active",index===stockActiveIndex);
+  });
+}
+function selectedStockQuestion(item,raw=""){
+  const text=String(raw||"").trim();
+  if(text&&text!==item.name&&!/^\d{6}(?:\.(?:SH|SZ))?$/i.test(text)){
+    return text.includes(item.name)?`${item.symbol} ${text}`:`${item.symbol} ${item.name} ${text}`;
+  }
+  return `${item.symbol} ${item.name} 的基本面、估值、风险和反方证据`;
+}
+function chooseStock(item,{submit=false,raw=""}={}){
+  $("#q").value=selectedStockQuestion(item,raw);hideStockSuggestions();
+  setVoiceStatus(`已选择 ${item.name}（${item.symbol}）`);$("#q").focus();
+  if(submit)setTimeout(run,0);
+}
+function showStockSuggestions(results,message=""){
+  const box=$("#stockSuggestions");box.innerHTML="";stockResults=results;stockActiveIndex=-1;
+  if(!results.length){
+    if(!message){hideStockSuggestions();return;}
+    const empty=document.createElement("div");empty.className="stock-empty";empty.textContent=message;box.appendChild(empty);
+  }else results.forEach((item,index)=>{
+    const button=document.createElement("button");button.type="button";button.className="stock-option";button.setAttribute("role","option");
+    button.innerHTML=`<span class="stock-name">${esc(item.name)}</span><span class="stock-symbol">${esc(item.symbol)}</span>`;
+    button.onmouseenter=()=>{stockActiveIndex=index;paintStockActive();};
+    button.onclick=()=>chooseStock(item,{submit:true});box.appendChild(button);
+  });
+  box.classList.add("open");$("#q").setAttribute("aria-expanded","true");
+}
+async function lookupStocks(query){
+  const text=String(query||"").trim();if(!text)return POPULAR_STOCKS.slice(0,8);
+  const digits=querySymbol(text);
+  if(digits)return [{symbol:normalizedStockSymbol(digits),name:"A 股"}];
+  const local=POPULAR_STOCKS.filter(item=>item.name.includes(text)||text.includes(item.name));
+  try{
+    const response=await fetch(`/api/stocks?q=${encodeURIComponent(text)}`,{headers:{"Accept":"application/json"}});
+    const payload=response.ok?await response.json():{};const remote=Array.isArray(payload.results)?payload.results:[];
+    const seen=new Set(),merged=[];
+    for(const item of [...local,...remote]){
+      if(!item||!/^\d{6}\.(?:SH|SZ)$/.test(item.symbol)||!item.name||seen.has(item.symbol))continue;
+      seen.add(item.symbol);merged.push({symbol:item.symbol,name:String(item.name)});if(merged.length===8)break;
+    }
+    return merged;
+  }catch(_){return local.slice(0,8);}
+}
+async function resolveStockInput(raw){
+  const text=String(raw||"").trim();if(querySymbol(text))return text;
+  const results=await lookupStocks(text);
+  const exact=results.find(item=>text===item.name||text.includes(item.name));
+  if(exact)return selectedStockQuestion(exact,text);
+  if(results.length===1)return selectedStockQuestion(results[0],text);
+  if(results.length>1){
+    showStockSuggestions(results);showResearchInputError("找到了多个相近名称，请先选择具体股票。");return "";
+  }
+  showStockSuggestions([],"没有找到对应的沪深 A 股，请换公司全称或输入六位代码。");
+  showResearchInputError("没有找到这只沪深 A 股，请换公司全称或输入六位代码。");return "";
+}
 function researchInputError(value,followUp=false){
   if(followUp)return "";
   const text=String(value||"").trim();
   if(/(?:^|[^A-Za-z0-9_])(?:SH|SZ)?\d{1,5}\.(?:SH|SZ)(?:$|[^A-Za-z0-9_])/i.test(text)){
     return "股票代码应为 6 位数字，例如 600519.SH。";
   }
-  if(!querySymbol(text))return "请输入 6 位 A 股代码，例如 600519.SH。";
+  if(!querySymbol(text))return "请输入股票名称或 6 位 A 股代码，例如贵州茅台、600519。";
   return "";
 }
 function showResearchInputError(message){
@@ -959,7 +1052,7 @@ function resetConversation(){
   conversationRoot="";conversationSymbol="";conversationHistory=[];conversationRound=0;activeQuestion="";
   $("#go").textContent="开庭 ⏎";
   $("#newQuestion").classList.add("hidden");
-  $("#q").placeholder="输入 A 股研究问题，如：600519.SH 的复权、分红、因子和流动性风险";
+  $("#q").placeholder="输入股票名称或代码，如：贵州茅台、600519";
 }
 function followUpPayload(question){
   return {
@@ -1241,7 +1334,16 @@ async function runFollowUp(question){
 }
 
 async function run(){
-  const q=$("#q").value.trim();if(!q||researchRunning)return;
+  let q=$("#q").value.trim();if(!q||researchRunning||stockResolving)return;
+  if(!conversationHistory.length&&/(?:^|[^A-Za-z0-9_])(?:SH|SZ)?\d{1,5}\.(?:SH|SZ)(?:$|[^A-Za-z0-9_])/i.test(q)){
+    showResearchInputError(researchInputError(q,false));return;
+  }
+  if(!conversationHistory.length&&!querySymbol(q)){
+    stockResolving=true;$("#go").disabled=true;
+    try{q=await resolveStockInput(q);}finally{stockResolving=false;$("#go").disabled=false;}
+    if(!q)return;$("#q").value=q;
+  }
+  hideStockSuggestions();
   const inputError=researchInputError(q,conversationHistory.length>0);
   if(inputError){showResearchInputError(inputError);return;}
   const nextSymbol=querySymbol(q),currentDigits=querySymbol(conversationSymbol||conversationRoot);
@@ -1307,14 +1409,33 @@ $("#stagePause").onclick=()=>setStreamPaused(!streamPaused);
 $("#stageRevealAll").onclick=revealCompleteStream;
 
 const EX=[
-  "600519.SH 复权、分红、因子和流动性风险",
-  "300750.SZ 成长因子、波动、流动性和指数权重变化",
-  "601318.SH 分红、股票池和风险证据"
+  {label:"贵州茅台 600519",query:"600519.SH 贵州茅台的复权、分红、因子和流动性风险"},
+  {label:"宁德时代 300750",query:"300750.SZ 宁德时代的成长、波动、流动性和指数权重变化"},
+  {label:"中国平安 601318",query:"601318.SH 中国平安的分红、基本面和风险证据"}
 ];
-const chips=$("#chips");EX.forEach(e=>{const c=document.createElement("span");c.className="chip";c.textContent=e;
-  c.onclick=()=>{$("#q").value=e;run();};chips.appendChild(c);});
+const chips=$("#chips");EX.forEach(e=>{const c=document.createElement("span");c.className="chip";c.textContent=e.label;
+  c.onclick=()=>{$("#q").value=e.query;run();};chips.appendChild(c);});
 $("#go").onclick=run;$("#newQuestion").onclick=runNewQuestion;
-$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")run();});
+$("#q").addEventListener("input",()=>{
+  clearTimeout(stockLookupTimer);const value=$("#q").value.trim();
+  if(conversationHistory.length||querySymbol(value)||value.length<2){hideStockSuggestions();return;}
+  const seq=++stockLookupSeq;
+  stockLookupTimer=setTimeout(async()=>{const results=await lookupStocks(value);
+    if(seq===stockLookupSeq&&$("#q").value.trim()===value)showStockSuggestions(results,results.length?"":"没有找到，试试公司全称或六位代码。");
+  },180);
+});
+$("#q").addEventListener("focus",()=>{if(!$("#q").value.trim()&&!conversationHistory.length)showStockSuggestions(POPULAR_STOCKS.slice(0,8));});
+$("#q").addEventListener("keydown",e=>{
+  const open=$("#stockSuggestions").classList.contains("open")&&stockResults.length;
+  if(open&&["ArrowDown","ArrowUp"].includes(e.key)){
+    e.preventDefault();const step=e.key==="ArrowDown"?1:-1;
+    stockActiveIndex=(stockActiveIndex+step+stockResults.length)%stockResults.length;paintStockActive();return;
+  }
+  if(e.key==="Escape"){hideStockSuggestions();return;}
+  if(e.key==="Enter"&&open&&stockActiveIndex>=0){e.preventDefault();chooseStock(stockResults[stockActiveIndex],{submit:true});return;}
+  if(e.key==="Enter")run();
+});
+document.addEventListener("click",e=>{if(!e.target.closest(".stock-picker"))hideStockSuggestions();});
 $("#voiceInput").onclick=()=>startVoiceInput(false);
 $("#voiceOutput").onclick=()=>setVoiceOutput(!voiceOutputEnabled);
 $("#voicePause").onclick=toggleSpeechPause;

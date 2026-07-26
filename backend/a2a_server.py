@@ -18,6 +18,7 @@ import hmac
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -61,6 +62,29 @@ _V1_METHODS = {
     "SubscribeToTask",
 }
 _LEGACY_METHODS = {"message/send", "message/stream"}
+
+_POPULAR_STOCKS = (
+    ("600519.SH", "贵州茅台"),
+    ("300750.SZ", "宁德时代"),
+    ("601318.SH", "中国平安"),
+    ("000858.SZ", "五粮液"),
+    ("000333.SZ", "美的集团"),
+    ("002594.SZ", "比亚迪"),
+    ("601899.SH", "紫金矿业"),
+    ("600036.SH", "招商银行"),
+    ("600900.SH", "长江电力"),
+    ("601012.SH", "隆基绿能"),
+    ("300059.SZ", "东方财富"),
+    ("000001.SZ", "平安银行"),
+    ("600276.SH", "恒瑞医药"),
+    ("002415.SZ", "海康威视"),
+    ("000651.SZ", "格力电器"),
+    ("600030.SH", "中信证券"),
+    ("601166.SH", "兴业银行"),
+    ("600887.SH", "伊利股份"),
+    ("601888.SH", "中国中免"),
+    ("300760.SZ", "迈瑞医疗"),
+)
 
 
 # --- auth ------------------------------------------------------------------
@@ -195,6 +219,78 @@ async def follow_up(request: Request) -> JSONResponse:
         "仅供学习与研究，不构成任何投资建议。"
     )
     return JSONResponse(payload)
+def _stock_suggestions_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Keep only Shanghai/Shenzhen A shares from the public symbol directory."""
+
+    suggestions: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in rows:
+        code = str(row.get("Code") or row.get("code") or "").strip()
+        name = str(row.get("Name") or row.get("name") or "").strip()
+        if not re.fullmatch(r"[036]\d{5}", code) or not name:
+            continue
+        symbol = f"{code}.{'SH' if code.startswith('6') else 'SZ'}"
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        suggestions.append({"symbol": symbol, "name": name})
+        if len(suggestions) >= 8:
+            break
+    return suggestions
+
+
+async def _search_public_stock_directory(query: str) -> list[dict[str, str]]:
+    import httpx
+
+    url = "https://searchapi.eastmoney.com/api/suggest/get"
+    params = {
+        "input": query,
+        "type": "14",
+        "count": "8",
+        "token": "D43BF722C8E33D5737622426B17E6F65",
+    }
+    async with httpx.AsyncClient(timeout=4.0, follow_redirects=True) as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        payload = response.json()
+    rows = payload.get("QuotationCodeTable", {}).get("Data", [])
+    return _stock_suggestions_from_rows(rows if isinstance(rows, list) else [])
+
+
+@app.get("/api/stocks")
+async def stock_search(q: str = "") -> JSONResponse:
+    """Resolve a company name or partial code without exposing data credentials."""
+
+    query = q.strip()[:40]
+    if not query:
+        return JSONResponse({
+            "results": [
+                {"symbol": symbol, "name": name}
+                for symbol, name in _POPULAR_STOCKS[:8]
+            ]
+        })
+
+    compact = query.upper().replace(" ", "")
+    local = [
+        {"symbol": symbol, "name": name}
+        for symbol, name in _POPULAR_STOCKS
+        if compact in symbol.replace(".", "") or query.lower() in name.lower()
+    ][:8]
+    try:
+        remote = await _search_public_stock_directory(query)
+    except Exception:
+        log.info("stock directory lookup unavailable", exc_info=True)
+        remote = []
+
+    combined: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in [*local, *remote]:
+        if item["symbol"] not in seen:
+            seen.add(item["symbol"])
+            combined.append(item)
+        if len(combined) >= 8:
+            break
+    return JSONResponse({"results": combined})
 
 
 # --- A2A message endpoint --------------------------------------------------
