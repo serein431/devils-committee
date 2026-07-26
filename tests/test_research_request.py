@@ -52,6 +52,10 @@ def test_text_symbol_rejects_hyphenated_suffix():
     assert symbol_from_text("研究 SH600519.-SZ") == ("UNKNOWN", "unknown")
 
 
+def test_text_symbol_rejects_five_digit_a_share_code():
+    assert symbol_from_text("研究 60063.SZ") == ("UNKNOWN", "unknown")
+
+
 def test_text_symbol_allows_sentence_ending_dot_runs():
     assert symbol_from_text("研究 600519.SZ.") == ("600519.SZ", "cn")
     assert symbol_from_text("研究 600519.SZ...") == ("600519.SZ", "cn")

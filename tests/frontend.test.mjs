@@ -167,6 +167,14 @@ ok("recognition end submits exactly once",
    JSON.parse(fetchCalls[0].options.body).topic === "研究600519");
 document.getElementById("voiceStop").click();
 
+const fetchCountBeforeInvalidCode = fetchCalls.length;
+document.getElementById("q").value = "60063.SZ";
+document.getElementById("go").click();
+await new Promise(resolve => window.setTimeout(resolve, 5));
+ok("five-digit A-share code is rejected before sending a request",
+   fetchCalls.length === fetchCountBeforeInvalidCode &&
+   document.getElementById("stageQuote").textContent.includes("6 位"));
+
 // --- drive the streaming renderer directly (no network) --------------------
 window.handleEvent({ stage: "argue", symbol: "600519.SH" });
 ok("symbol badge set", document.getElementById("bSym").textContent === "600519.SH");
@@ -198,6 +206,17 @@ ok("show-all reveals the complete pending delta",
    document.getElementById("stageQuote").textContent === "点击后立即显示这一整段文字");
 ok("streaming stage renders bold Markdown",
    document.querySelector("#stageQuote strong")?.textContent === "这一整段");
+
+window.handleEvent({ stage: "claim_start", id: "control-3", agent: "macro", side: "macro" });
+const longDelta = "真实研究内容".repeat(60);
+const longDeltaStarted = Date.now();
+await window.handleEvent({
+  stage: "claim_delta", id: "control-3", agent: "macro", side: "macro",
+  delta: longDelta,
+});
+ok("a long streamed chunk does not block later network events character by character",
+   Date.now() - longDeltaStarted < 80 &&
+   document.getElementById("stageQuote").textContent === longDelta);
 
 const evidence = [{ skill: "skill-factor-ranking-sage", summary: "因子", metrics: { ic: 0.079, ir: 0.9, n_obs: 24 } }];
 const stageFrames = [];
@@ -441,6 +460,8 @@ window.handleEvent({
 });
 ok("zero-claim result renders safely", document.getElementById("auditSub").textContent.includes("没有可审计论据"));
 ok("zero-claim result is not called all pass", !document.getElementById("auditSub").textContent.includes("全部通过"));
+ok("zero-claim reason is visible on the first-screen debate stage",
+   document.getElementById("stageQuote").textContent.includes("当前没有足够数据"));
 ok("completed research exposes separate follow-up and new-question actions",
    document.getElementById("go").textContent.includes("追问") &&
    !document.getElementById("newQuestion").classList.contains("hidden"));

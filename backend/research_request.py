@@ -33,6 +33,13 @@ def normalize_symbol(value: str) -> tuple[str, str]:
 
 
 def symbol_from_text(text: str) -> tuple[str, str]:
+    malformed_a_share = re.search(
+        r"(?i)(?<![A-Za-z0-9_])(?:sh|sz)?\d{1,5}\.(?:sh|sz)"
+        r"(?![A-Za-z0-9_])",
+        text,
+    )
+    if malformed_a_share:
+        return "UNKNOWN", "unknown"
     candidate = re.search(
         r"(?i)(?<![A-Za-z0-9_])(?:sh|sz)?\d{6}",
         text,

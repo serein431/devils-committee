@@ -267,13 +267,40 @@ def test_missing_survivorship_datasets_are_insufficient_not_error():
     ]
 
 
-def test_liquidity_defaults_are_labeled_as_assumptions():
+def test_liquidity_does_not_substitute_demo_position_inputs():
     params, assumptions = liquidity_parameters(_request(), avg_amount=20_000_000.0)
 
-    assert params["position_value"] == 100000.0
-    assert params["spread_bps"] == 10.0
-    assert any("position_value" in item for item in assumptions)
-    assert any("spread_bps" in item for item in assumptions)
+    assert params == {}
+    assert assumptions == []
+
+    result = OnlineSkillRunner().run_liquidity(_request(), _bundle())
+
+    assert result.status == "insufficient-evidence"
+    assert result.assumptions == []
+    assert result.warnings == [
+        "portfolio_value and spread_bps are required; no demo values substituted"
+    ]
+
+
+def test_liquidity_uses_explicit_user_inputs_without_assumptions():
+    request = ResearchRequest(
+        "600519.SH",
+        "cn",
+        "分析风险",
+        "20240101",
+        "20260724",
+        portfolio_value=500000.0,
+        spread_bps=8.0,
+    )
+
+    params, assumptions = liquidity_parameters(request, avg_amount=20_000_000.0)
+
+    assert params == {
+        "position_value": 500000.0,
+        "adv": 20_000_000.0,
+        "spread_bps": 8.0,
+    }
+    assert assumptions == []
 
 
 def test_report_to_result_uses_findings_limitations_and_deduped_hashes():

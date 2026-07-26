@@ -32,7 +32,7 @@ _PUBLIC_TIMEOUT = "研究请求超过内部时间限制。"
 _PUBLIC_DATA_ERROR = "研究数据暂不可用，请稍后重试。"
 _PUBLIC_INSUFFICIENT = "当前没有足够的授权数据支持研究。"
 _PUBLIC_UNSUPPORTED = "当前真实研究只支持 A 股代码。"
-_NO_MOCK_SUBSTITUTE = "当前结果没有使用模拟数据代替真实证据。"
+_NO_MOCK_SUBSTITUTE = "系统不会用虚拟数据补齐缺失证据。"
 _UNAVAILABLE_SKILL_STATUSES = {"error", "insufficient-evidence"}
 _HARD_FAIL_AUDIT_STATUSES = {
     "bad_data",

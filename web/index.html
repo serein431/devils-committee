@@ -815,17 +815,13 @@ function startStageStream(item){
 }
 async function appendStageStream(item){
   if(stageStreamId!==item.id)return;
-  const quote=$("#stageQuote"),chars=Array.from(String(item.delta||""));
-  for(let index=0;index<chars.length;index++){
-    await waitForStreamResume();
-    if(stageStreamId!==item.id)return;
-    if(streamRevealAll){
-      quote.dataset.rawText=(quote.dataset.rawText||"")+chars.slice(index).join("");
-      quote.innerHTML=inlineMd(quote.dataset.rawText);quote.scrollTop=quote.scrollHeight;return;
-    }
-    const char=chars[index];quote.dataset.rawText=(quote.dataset.rawText||"")+char;
-    quote.innerHTML=inlineMd(quote.dataset.rawText);quote.scrollTop=quote.scrollHeight;
-    const pause=/[。！？；]/.test(char)?STREAM_CHAR_MS*2.4:STREAM_CHAR_MS;
+  await waitForStreamResume();
+  if(stageStreamId!==item.id)return;
+  const quote=$("#stageQuote"),delta=String(item.delta||"");
+  quote.dataset.rawText=(quote.dataset.rawText||"")+delta;
+  quote.innerHTML=inlineMd(quote.dataset.rawText);quote.scrollTop=quote.scrollHeight;
+  if(!streamRevealAll&&!IS_JSDOM&&delta){
+    const pause=Math.min(160,Math.max(24,Array.from(delta).length*12));
     await new Promise(resolve=>setTimeout(resolve,pause));
   }
 }
@@ -896,6 +892,20 @@ function stampDomId(claimId){return claimCardId(claimId).replace("card-","stamp-
 function querySymbol(value){
   const match=String(value||"").match(/(?:(?:SH|SZ)\s*)?(\d{6})(?:\.(?:SH|SZ))?/i);
   return match?match[1]:"";
+}
+function researchInputError(value,followUp=false){
+  if(followUp)return "";
+  const text=String(value||"").trim();
+  if(/(?:^|[^A-Za-z0-9_])(?:SH|SZ)?\d{1,5}\.(?:SH|SZ)(?:$|[^A-Za-z0-9_])/i.test(text)){
+    return "股票代码应为 6 位数字，例如 600519.SH。";
+  }
+  if(!querySymbol(text))return "请输入 6 位 A 股代码，例如 600519.SH。";
+  return "";
+}
+function showResearchInputError(message){
+  returnStagePlayers("输入有误");
+  const quote=$("#stageQuote");quote.dataset.rawText=message;quote.innerHTML=inlineMd(message);
+  setStage(message,false);setVoiceStatus(message,true);
 }
 function resetConversation(){
   conversationRoot="";conversationSymbol="";conversationHistory=[];conversationRound=0;activeQuestion="";
@@ -1026,6 +1036,9 @@ function renderResult(r){
   $("#auditSec").classList.remove("hidden");
   // A zero-claim result means no audit was possible, never "all pass".
   if(claimCount===0){
+    const reason=(r.risk_boundaries||[])[0]||"当前数据没有形成可发布论据。";
+    returnStagePlayers("研究未开始");
+    const quote=$("#stageQuote");quote.dataset.rawText=reason;quote.innerHTML=inlineMd(reason);
     $("#auditSub").textContent=`没有可审计论据 · 数据状态 ${dataStatus}`;
     const row=document.createElement("div");row.className="vrow";
     row.innerHTML=`${ring(.6,'var(--warn)')}<div class="vmain"><div class="vtop">
@@ -1147,6 +1160,8 @@ function showCompatibilityProgress(){
 
 async function run(){
   const q=$("#q").value.trim();if(!q||researchRunning)return;
+  const inputError=researchInputError(q,conversationHistory.length>0);
+  if(inputError){showResearchInputError(inputError);return;}
   const nextSymbol=querySymbol(q),currentDigits=querySymbol(conversationSymbol||conversationRoot);
   if(conversationHistory.length&&nextSymbol&&currentDigits&&nextSymbol!==currentDigits)resetConversation();
   const followUp=conversationHistory.length>0;

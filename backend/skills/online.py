@@ -148,20 +148,13 @@ def liquidity_parameters(
     request: ResearchRequest,
     avg_amount: float,
 ) -> tuple[dict[str, float], list[str]]:
-    assumptions: list[str] = []
-    position_value = request.portfolio_value
-    if position_value is None:
-        position_value = 100000.0
-        assumptions.append("position_value=100000 CNY demo assumption")
-    spread_bps = request.spread_bps
-    if spread_bps is None:
-        spread_bps = 10.0
-        assumptions.append("spread_bps=10 demo assumption")
+    if request.portfolio_value is None or request.spread_bps is None:
+        return {}, []
     return {
-        "position_value": float(position_value),
+        "position_value": float(request.portfolio_value),
         "adv": float(avg_amount),
-        "spread_bps": float(spread_bps),
-    }, assumptions
+        "spread_bps": float(request.spread_bps),
+    }, []
 
 
 def error_result(
@@ -526,6 +519,12 @@ def _liquidity_rows(
     request: ResearchRequest,
     bundle: MarketDataBundle,
 ) -> tuple[list[dict[str, Any]], list[str], str]:
+    if request.portfolio_value is None or request.spread_bps is None:
+        return (
+            [],
+            [],
+            "portfolio_value and spread_bps are required; no demo values substituted",
+        )
     daily = _read_records(bundle, "daily")
     amounts = [
         _number(

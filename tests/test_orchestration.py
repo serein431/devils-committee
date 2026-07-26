@@ -87,7 +87,7 @@ def test_us_input_returns_structured_insufficient_evidence(monkeypatch):
     assert result.open_disagreements == []
     assert result.disclaimer
     assert "当前真实研究只支持 A 股代码。" in result.risk_boundaries
-    assert "当前结果没有使用模拟数据代替真实证据。" in result.risk_boundaries
+    assert "系统不会用虚拟数据补齐缺失证据。" in result.risk_boundaries
 
 
 def test_prepare_failure_does_not_expose_private_detail(monkeypatch):
