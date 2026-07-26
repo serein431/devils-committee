@@ -348,11 +348,27 @@ def _deterministic_overall_assessment(
     else:
         return f"综合判断：证据不足。{symbol} 当前缺少足够的可发布公司研究画像。"
 
-    parts = [f"综合判断：{label}。"]
-    if positives:
-        parts.append("强项是" + "、".join(positives[:3]) + "；")
-    if negatives:
-        parts.append("弱项是" + "、".join(negatives[:4]) + "。")
+    parts = [f"综合判断：{label}。听完四方，"]
+    if positives and negatives:
+        parts.append(
+            "多头最有依据的部分是"
+            + "、".join(positives[:3])
+            + "；空头和风控更有力的提醒是"
+            + "、".join(negatives[:4])
+            + "。"
+        )
+    elif positives:
+        parts.append(
+            "多头提出的"
+            + "、".join(positives[:3])
+            + "在本轮占据上风，但这仍是已有数据下的阶段性判断。"
+        )
+    elif negatives:
+        parts.append(
+            "空头和风控提出的"
+            + "、".join(negatives[:4])
+            + "在本轮占据上风，积极观点还缺少足够反证。"
+        )
     if valuation and valuation.status == "success":
         pe = valuation.metrics.get("pe_estimate")
         pb = valuation.metrics.get("pb_estimate")
@@ -363,10 +379,89 @@ def _deterministic_overall_assessment(
             values.append(f"PB约 {pb:.2f} 倍")
         if values:
             parts.append(
-                "估值仅作为快照（"
+                "估值争论目前只能确认快照（"
                 + "、".join(values)
-                + "），缺少同行与历史分位时不判断高低。"
+                + "），缺少同行与历史分位时，主持人不把它归为贵或便宜。"
             )
+    parts.append("这就是本轮交流收敛后的结论，而不是对未来涨跌的预测。")
+    return "".join(parts)
+
+
+def _dialogue_excerpt(text: str, limit: int = 105) -> str:
+    cleaned = re.sub(r"\*\*", "", re.sub(r"\s+", " ", text)).strip()
+    sentences = [
+        item.strip()
+        for item in re.split(r"(?<=[。！？])", cleaned)
+        if item.strip()
+    ]
+    generic = ("我负责", "维度整体", "维度判断", "宏观环境这块", "证据不足，偏")
+    excerpt = next(
+        (
+            item
+            for item in sentences
+            if (len(item) >= 28 or re.search(r"\d", item))
+            and not (len(item) < 38 and any(token in item for token in generic))
+        ),
+        sentences[0] if sentences else cleaned,
+    ).rstrip("。！？；")
+    return excerpt if len(excerpt) <= limit else excerpt[:limit].rstrip("，；。") + "…"
+
+
+def _conversation_overall_assessment(
+    symbol: str,
+    positions: list[Claim],
+    rebuttals: list[Claim],
+    verdict_by_claim: dict[str, AuditVerdict],
+) -> str:
+    by_side = {claim.side: claim for claim in positions}
+
+    def accepted(side: str) -> bool:
+        claim = by_side.get(side)
+        verdict = verdict_by_claim.get(claim.id) if claim else None
+        return bool(verdict and verdict.passed)
+
+    if accepted("bull") and (accepted("bear") or accepted("risk")):
+        label = "分歧较大"
+        closing = "积极证据和下行风险同时成立，不能用单一的多头或空头叙事概括。"
+    elif accepted("bull"):
+        label = "中性偏积极"
+        closing = "积极论据目前更完整，但仍需保留宏观和风险侧提出的边界。"
+    elif accepted("bear") or accepted("risk"):
+        label = "中性偏谨慎"
+        closing = "风险论据目前更完整，积极观点还没有充分化解这些质疑。"
+    else:
+        label = "分歧较大"
+        closing = "各方观点仍有审计保留，本轮只能确认争论焦点，不能把任何一方写成定论。"
+
+    role_names = {
+        "bull": "多头",
+        "bear": "空头",
+        "macro": "宏观",
+        "risk": "风控",
+    }
+    clauses = []
+    for side in ("bull", "bear", "macro", "risk"):
+        claim = by_side.get(side)
+        if claim is None:
+            continue
+        verdict = verdict_by_claim.get(claim.id)
+        suffix = "" if verdict and verdict.passed else "，但审计仍有保留"
+        clauses.append(
+            f"{role_names[side]}的核心观点是{_dialogue_excerpt(claim.text)}{suffix}"
+        )
+
+    first_exchange = "；".join(clauses[:2])
+    second_exchange = "；".join(clauses[2:])
+    parts = [f"综合判断：{label}。听完四方，{first_exchange}。"]
+    if second_exchange:
+        parts.append(second_exchange + "。")
+    if rebuttals:
+        replies = "；".join(
+            f"{role_names.get(claim.side, claim.agent)}回应称{_dialogue_excerpt(claim.text, 85)}"
+            for claim in rebuttals[:2]
+        )
+        parts.append("第二轮里，" + replies + "。")
+    parts.append("主持人的收束是：" + closing)
     return "".join(parts)
 
 
@@ -795,51 +890,17 @@ class ChairAgent(_Base):
         risk = by_side.get("risk")
         flags = [verdict for verdict in verdicts if not verdict.passed]
 
-        assessment_payload = {
-            "positions": [
-                {
-                    "claim_id": claim.id,
-                    "side": claim.side,
-                    "text": claim.text,
-                    "confidence": claim.confidence,
-                }
-                for claim in accepted_positions
-            ],
-            "accepted_rebuttals": [
-                {
-                    "claim_id": claim.id,
-                    "side": claim.side,
-                    "responds_to": claim.responds_to,
-                    "text": claim.text,
-                }
-                for claim in accepted_rebuttals
-            ],
-            "audit_flags": [
-                {
-                    "claim_id": verdict.claim_id,
-                    "status": verdict.status,
-                    "reason": verdict.reason,
-                }
-                for verdict in flags
-            ],
-            "research_profiles": {
-                profile_id: {
-                    "status": result.status,
-                    "metrics": result.metrics,
-                    "assumptions": result.assumptions,
-                }
-                for profile_id, result in (evidence.analysis.items() if evidence else [])
-            },
-        }
-        overall = await asyncio.to_thread(
-            self.llm.chair_line,
-            symbol=symbol,
-            kind="overall_assessment",
-            payload=assessment_payload,
-        )
-        overall = str(overall or "").strip()
-        if not overall.startswith("综合判断："):
-            overall = f"综合判断：{overall or '现有证据不足以形成稳定评价。'}"
+        if positions:
+            overall = _conversation_overall_assessment(
+                symbol,
+                positions,
+                accepted_rebuttals,
+                verdict_by_claim,
+            )
+        elif evidence is not None:
+            overall = _deterministic_overall_assessment(symbol, evidence)
+        else:
+            overall = f"综合判断：证据不足。{symbol} 本轮没有形成可总结的四方发言。"
         overall_claim = Claim(
             id="chair-overall",
             agent="Chair",

@@ -315,13 +315,53 @@ def test_audit_marks_grounding_violation_as_thin_data(evidence_fixture):
     assert "删除具体原因推断" in verdict.remediation
 
 
-def test_chair_falls_back_to_profiles_when_summary_overreaches(evidence_fixture):
-    class UnsafeChairLLM(MockLLM):
+def test_chair_summarizes_the_actual_debate_dialogue(evidence_fixture):
+    class UnexpectedChairLLM(MockLLM):
         def chair_line(self, *, symbol, kind, payload):
-            if kind == "overall_assessment":
-                return "综合判断：估值缺乏安全边际，近期上涨只是短期反弹。"
-            return super().chair_line(symbol=symbol, kind=kind, payload=payload)
+            raise AssertionError("dialogue summary must not make another LLM call")
 
+    claims = [
+        Claim(
+            "bull-1",
+            "Bull",
+            "bull",
+            "我负责看多，这维度整体偏强。营收同比增长 6.34%，但利润增速较慢。",
+        ),
+        Claim("bear-1", "Bear", "bear", "偏弱。近120日最大回撤达到 -23.07%。"),
+        Claim(
+            "risk-2",
+            "Risk",
+            "risk",
+            "回应 bull-1：盈利改善不能消除波动风险。",
+            kind="rebuttal",
+            round=2,
+            responds_to=["bull-1"],
+        ),
+    ]
+    verdicts = [
+        AuditVerdict(claim.id, "pass", "证据引用完整。")
+        for claim in claims
+    ]
+
+    result = asyncio.run(
+        ChairAgent(UnexpectedChairLLM()).synthesize(
+            "601628.SH",
+            claims,
+            verdicts,
+            evidence_fixture,
+        )
+    )
+
+    summary = result["consensus"][0]
+    assert "听完四方" in summary
+    assert "多头的核心观点是营收同比增长 6.34%" in summary
+    assert "空头的核心观点是近120日最大回撤达到 -23.07%" in summary
+    assert "我负责看多" not in summary
+    assert "第二轮里，风控回应称回应 bull-1" in summary
+    assert "主持人的收束是" in summary
+
+
+def test_chair_grounding_fallback_still_reads_like_a_host_summary(evidence_fixture):
     evidence = copy.deepcopy(evidence_fixture)
     evidence.analysis = {
         FUNDAMENTAL_PROFILE_ID: SkillResult(
@@ -330,11 +370,7 @@ def test_chair_falls_back_to_profiles_when_summary_overreaches(evidence_fixture)
             status="success",
             duration_ms=0,
             dataset_hashes=["fundamental-hash"],
-            metrics={
-                "revenue_yoy_pct": -15.33,
-                "net_profit_yoy_pct": -32.28,
-                "direction": "negative",
-            },
+            metrics={"revenue_yoy_pct": -15.33, "net_profit_yoy_pct": 8.2},
         ),
         MARKET_PROFILE_ID: SkillResult(
             skill_id=MARKET_PROFILE_ID,
@@ -347,32 +383,24 @@ def test_chair_falls_back_to_profiles_when_summary_overreaches(evidence_fixture)
                 "relative_to_csi300_60d_pct": 14.32,
                 "volatility_60d_ann_pct": 41.09,
                 "max_drawdown_120d_pct": -34.65,
-                "direction": "positive",
             },
-        ),
-        VALUATION_PROFILE_ID: SkillResult(
-            skill_id=VALUATION_PROFILE_ID,
-            mode="mock",
-            status="success",
-            duration_ms=0,
-            dataset_hashes=["valuation-hash"],
-            metrics={"pe_estimate": 14.6, "pb_estimate": 1.86},
         ),
     }
 
     result = asyncio.run(
-        ChairAgent(UnsafeChairLLM()).synthesize(
+        ChairAgent(MockLLM()).synthesize(
             "601628.SH",
-            [],
-            [],
+            [Claim("bull-1", "Bull", "bull", "近期上涨只是短期反弹。")],
+            [AuditVerdict("bull-1", "pass", "证据引用完整。")],
             evidence,
         )
     )
 
-    assert "强项是近60日收益 11.77%" in result["consensus"][0]
-    assert "弱项是营收同比 -15.33%" in result["consensus"][0]
-    assert "缺少同行与历史分位时不判断高低" in result["consensus"][0]
-    assert "只是短期反弹" not in result["consensus"][0]
+    summary = result["consensus"][0]
+    assert "听完四方" in summary
+    assert "多头最有依据的部分" in summary
+    assert "空头和风控更有力的提醒" in summary
+    assert "只是短期反弹" not in summary
 
 
 def test_available_result_is_not_downgraded_by_an_unavailable_peer_skill(
